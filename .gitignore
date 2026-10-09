@@ -1,18 +1,45 @@
-# This .gitignore is appropriate for repositories deployed to GitHub Pages and using
-# a Gemfile as specified at https://github.com/github/pages-gem#conventional
+# ============================================
+# Project Zomboid Mod Manager (Electron)
+# ============================================
 
-# Basic Jekyll gitignores (synchronize to Jekyll.gitignore)
-_site/
-.sass-cache/
-.jekyll-cache/
-.jekyll-metadata
+# Dipendenze (si rigenerano con `npm install`)
+node_modules/
 
-# Additional Ruby/bundler ignore for when you run: bundle install
-/vendor
+# Output di electron-builder (exe, installer, win-unpacked)
+# NB: gli .exe vanno caricati in GitHub > Releases, non nel repo
+dist/
+out/
+release/
 
-# Specific ignore for GitHub Pages
-# GitHub Pages will always use its own deployed version of pages-gem 
-# This means GitHub Pages will NOT use your Gemfile.lock and therefore it is
-# counterproductive to check this file into the repository.
-# Details at https://github.com/github/pages-gem/issues/768
-Gemfile.lock
+# Cache e file temporanei di npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.eslintcache
+
+# Log
+*.log
+logs/
+
+# Variabili d'ambiente / segreti
+.env
+.env.*
+
+# Archivi e binari generati
+*.rar
+*.zip
+*.7z
+*.exe
+*.msi
+*.blockmap
+
+# File di sistema
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp

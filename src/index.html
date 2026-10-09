@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; frame-src https:">
+<link rel="stylesheet" href="style.css"><title>Project Zomboid Mod Manager</title></head><body>
+<div id="app">
+ <aside id="side">
+  <div class="brand">🧟 PZ Mod Manager</div>
+  <div class="lbl">Version profiles</div><div id="profiles"></div>
+  <div class="lbl">Active profile</div>
+  <div class="card" id="paths"></div>
+  <button class="link" id="btnSettings">⚙ Settings</button>
+ </aside>
+ <main id="center">
+  <div id="instbar" class="instbar"></div>
+  <div class="tabs"><button class="tab on" data-t="browser">Workshop Browser</button><button class="tab" data-t="mods">Mods <span id="modCount"></span></button></div>
+  <section id="browser">
+   <div class="bar"><button id="back">◀</button><button id="fwd">▶</button><button id="home">⌂</button>
+    <input id="paste" placeholder="Paste a Workshop URL or ID…"><button id="addPaste" class="primary">Add</button></div>
+   <webview id="wv" src="https://steamcommunity.com/app/108600/workshop/" allowpopups></webview>
+   <div id="detect" class="detect">Browse the Workshop – open a mod page and its ID is picked up automatically.</div>
+  </section>
+  <section id="modsView" hidden><div id="modTable"></div></section>
+ </main>
+ <aside id="actions">
+  <button id="btnLaunch" class="big launch">▶ Launch Project Zomboid</button>
+  <div id="launchInfo" class="launchInfo"></div>
+  <button id="btnDownload" class="big primary">⬇ Download</button>
+  <button id="btnPush" class="big accent">➜ Push to Project Zomboid</button>
+  <button id="btnRemove" class="big">🗑 Remove selected…</button>
+  <button id="btnUpdates" class="big">⟳ Check for updates</button>
+  <button id="btnClear" class="big danger">Clear Cache</button>
+  <button id="btnCancel" class="big" hidden>■ Cancel downloads</button>
+ </aside>
+ <footer id="status"><div id="steamStatus"></div><div id="queue"></div><div class="prog"><div id="bar"></div></div><div id="logline"></div></footer>
+</div>
+<div id="modal" hidden><div class="box"><h3 id="mTitle"></h3><div id="mBody"></div><div id="mBtns"></div></div></div>
+<div id="toast" hidden></div>
+<script src="renderer.js"></script></body></html>

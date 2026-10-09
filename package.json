@@ -1,0 +1,31 @@
+{
+  "name": "pz-mod-manager",
+  "productName": "Project Zomboid Mod Manager",
+  "version": "1.1.0",
+  "description": "Mod manager for Project Zomboid (Build 41/42) using SteamCMD",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "test": "node --test test/instances.test.js test/launcher.test.js"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.pzmodmanager.app",
+    "productName": "Project Zomboid Mod Manager",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
