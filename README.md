@@ -78,6 +78,13 @@ delete** them; every instance has its own mod list, downloads, update state and 
   **Remove** acts on the selected instance only. Existing users get a `Default` instance containing their old library.
 * Storage folders can be chosen when creating an instance (default: `<library>\Instances\<profile>\<name>`).
 
+### Mods page (all instances)
+**🗂 Mods · all instances** (right-hand panel) lists the mods of every instance and profile. Tick one or more mods, then:
+* **Move** copies the library copy and the Mods folder copy to the chosen instance, adds the mod to its list and only then removes it from the source. If anything fails the source is left untouched. If the mod already exists in the target you choose *Replace*, *Keep both* or *Skip*.
+* **Delete…** offers *Remove from library*, *Remove from Mods folder* or *Remove from both*; each option is explained before you confirm.
+
+Both are refused while a download is running for one of the instances, or while the game is running with one of them active.
+
 ### How switching works (and why)
 Project Zomboid reads local mods from `%UserProfile%\Zomboid\mods` and has no setting for another mods folder
 (the `-cachedir` launch option would also move saves/options, which is not wanted). So the manager turns

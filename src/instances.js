@@ -125,4 +125,4 @@ async function activate(link, target, opts = {}) {
   return { already: false, backup, imported };
 }
 
-module.exports = { activate, linkInfo, isLinkedTo, removeLink, samePath, inside, slugify, norm, err };
+module.exports = { activate, linkInfo, isLinkedTo, removeLink, samePath, inside, slugify, norm, err, hint };

@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path'), fs = require('fs'), fsp = fs.promises, cp = require('child_process');
 const https = require('https'), crypto = require('crypto');
-const instLib = require('./instances'), launcher = require('./launcher');
+const instLib = require('./instances'), launcher = require('./launcher'), modOps = require('./mods');
 const APPID = '108600';
 let win, S, mods = [], queue = [], running = false, installed = {}, proc = null, logs = [], launching = false;
 
@@ -68,13 +68,14 @@ function exeFor(pid) {
   if (p.gameDir) { const e = path.join(p.gameDir, 'ProjectZomboid64.exe'); if (fs.existsSync(e)) return e; }
   return '';
 }
+const hasUpdate = (m) => !!(m.remoteUpdated && m.remoteUpdated * 1000 > m.downloadedAt && m.status !== 'Failed');
 function pub() {
   const ci = getInst(), p = S.profiles[S.active], exe = exeFor(S.active), li = instLib.linkInfo(p.modsDir || '');
   return {
     settings: S, busy: running, queue, logs: logs.slice(-40), steam: findSteamcmd(), launching,
     instance: { id: ci.id, name: ci.name, dir: ci.dir, modsDir: ci.modsDir, linked: instLib.isLinkedTo(p.modsDir, ci.modsDir), linkKind: li.kind },
     exe, exeExists: !!exe && fs.existsSync(exe),
-    mods: mods.map((m) => ({ ...m, installed: !!installed[m.id], update: !!(m.remoteUpdated && m.remoteUpdated * 1000 > m.downloadedAt && m.status !== 'Failed') }))
+    mods: mods.map((m) => ({ ...m, installed: !!installed[m.id], update: hasUpdate(m) }))
   };
 }
 const send = () => win && win.webContents.send('state', pub());
@@ -483,6 +484,49 @@ ipcMain.handle('launch', wrap(async () => {
     log(`Launched Project Zomboid with instance "${ci.name}".`);
     return { info: `Launched Project Zomboid with instance "${ci.name}".${res.steamStarted ? ' Steam was started first.' : ''}${a.backup ? ' Your previous Mods folder was kept as ' + a.backup + '.' : ''}${res.note ? ' ' + res.note : ''}` };
   } finally { launching = false; send(); }
+}));
+
+/* ---------- mods of all instances ---------- */
+let modsBusy = false;
+const locate = (iid) => {
+  for (const [pid, L] of Object.entries(S.instances)) { const i = L.find((x) => x.id === iid); if (i) return { ...i, pid }; }
+  throw err('That instance no longer exists.');
+};
+async function withModsLock(insts, fn) {
+  if (modsBusy) throw err('Another mod operation is still running.');
+  modsBusy = true;
+  try {
+    if (launching) throw err('A launch is in progress. Wait for it to finish.');
+    if (queue.some((q) => insts.some((i) => i.id === q.iid) && ['Waiting', 'Downloading', 'Processing'].includes(q.status))) throw err('A download for one of these instances is still running. Wait for it or cancel it first.');
+    const g = await launcher.anyRunning(launcher.GAME_PROCS);
+    if (g && insts.some((i) => modLinks().some((l) => instLib.isLinkedTo(l, i.modsDir)))) throw err(`${g} is running and is using one of these instances. Close the game first.`);
+    return await fn();
+  } finally { modsBusy = false; mods = await readIdx(S.active); await refreshInstalled(); }
+}
+const modDeps = { readIdx: async (pid, iid) => modOps.withLocal(getInst(pid, iid), await readIdx(pid, iid)), writeIdx: (pid, iid, arr) => writeIdx(pid, iid, modOps.withoutLocal(arr)), safeChild, ask: (name, where) => ask('conflict', { name, where }) };
+
+ipcMain.handle('modsAll', wrap(async () => {
+  const items = [];
+  for (const [pid, L] of Object.entries(S.instances)) for (const i of L) {
+    const list = (await modDeps.readIdx(pid, i.id)).sort((a, b) => String(a.title).localeCompare(String(b.title)));
+    for (const m of list) {
+      const ok = m.status !== 'Failed';
+      items.push({ iid: i.id, iname: i.name, pid, pname: (S.profiles[pid] || {}).name || pid, id: m.id, wid: m.wid, name: m.name, title: m.title, status: m.status, error: m.error, downloadedAt: m.downloadedAt, update: hasUpdate(m),
+        hasLib: ok && fs.existsSync(path.join(i.libDir, m.wid, m.name)), inMods: ok && fs.existsSync(path.join(i.modsDir, m.name)) });
+    }
+  }
+  return { items };
+}));
+ipcMain.handle('modsMove', wrap(async (items, targetId) => {
+  const to = locate(targetId), list = (items || []).map((x) => ({ from: locate(x.iid), id: x.id }));
+  if (!list.length) throw err('Select the mods you want to move first.');
+  return withModsLock([to, ...list.map((x) => x.from)], async () => { touchInstance(to); return { results: await modOps.moveMods(list, to, modDeps), instance: to.name }; });
+}));
+ipcMain.handle('modsDelete', wrap(async (items, mode) => {
+  if (!['lib', 'game', 'both'].includes(mode)) throw err('Unknown delete option.');
+  const list = (items || []).map((x) => ({ inst: locate(x.iid), id: x.id }));
+  if (!list.length) throw err('Select the mods you want to delete first.');
+  return withModsLock(list.map((x) => x.inst), async () => ({ results: await modOps.deleteMods(list, mode, modDeps) }));
 }));
 
 /* ---------- window ---------- */
