@@ -49,3 +49,23 @@ test('process detection', async () => {
   assert.equal(await L.isProcessRunning('definitely-not-a-process'), false);
   assert.equal(await L.isProcessRunning('node'), true);
 });
+
+test('parseArgs: empty, single, multiple, quoted and special characters', () => {
+  assert.deepEqual(L.parseArgs(''), []); assert.deepEqual(L.parseArgs('   '), []);
+  assert.deepEqual(L.parseArgs('-agentlib:zbNative--'), ['-agentlib:zbNative--']);
+  assert.deepEqual(L.parseArgs('-javaagent:ZombieBuddy.jar -Dfoo=bar'), ['-javaagent:ZombieBuddy.jar', '-Dfoo=bar']);
+  assert.deepEqual(L.parseArgs('-Dp="C:\\My Dir\\x.jar" -Dq=a&b|c;$x%y^z'), ['-Dp=C:\\My Dir\\x.jar', '-Dq=a&b|c;$x%y^z']);
+});
+test('launchSequence passes custom args to the game; none when empty', async () => {
+  let got; const f = fakes({ isRunning: async () => true, startGame: async (e, a) => { got = a; } });
+  await L.launchSequence(f.d); assert.deepEqual(got, []);
+  await L.launchSequence(Object.assign(f.d, { args: ['-a', '-b c'] })); assert.deepEqual(got, ['-a', '-b c']);
+});
+test('custom args reach the spawned process unchanged', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'pzl-')), exe = path.join(d, 'ProjectZomboid64.exe'), out = path.join(d, 'out.txt');
+  fs.writeFileSync(exe, `#!/bin/sh\nfor a in "$@"; do echo "[$a]" >> "${out}"; done\n`, { mode: 0o755 });
+  await L.spawnDetached(exe, L.parseArgs('-agentlib:zbNative-- -javaagent:ZombieBuddy.jar -Dx="a b&c;$HOME"'));
+  for (let i = 0; i < 50 && !fs.existsSync(out); i++) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(fs.readFileSync(out, 'utf8'), '[-agentlib:zbNative--]\n[-javaagent:ZombieBuddy.jar]\n[-Dx=a b&c;$HOME]\n');
+});

@@ -12,7 +12,7 @@ const log = (l) => { logs.push(l); if (logs.length > 200) logs.shift(); win && w
 /* ---------- settings ---------- */
 const sfile = () => path.join(app.getPath('userData'), 'settings.json');
 const defaults = () => ({
-  steamcmd: '', steamExe: '', library: path.join(app.getPath('documents'), 'PZModManager'), active: 'b42',
+  steamcmd: '', steamExe: '', launchArgs: '', library: path.join(app.getPath('documents'), 'PZModManager'), active: 'b42',
   instances: {}, activeInstance: {},
   profiles: {
     b41: { name: 'Build 41', gameDir: '', exePath: '', modsDir: path.join(app.getPath('home'), 'Zomboid', 'mods') },
@@ -463,6 +463,7 @@ ipcMain.handle('pickSteamExe', wrap(async () => {
   if (!/^steam\.exe$/i.test(path.basename(r.filePaths[0]))) throw err('Please select steam.exe (usually C:\\Program Files (x86)\\Steam\\steam.exe).');
   S.steamExe = r.filePaths[0]; saveSettings(); send(); return { info: 'Steam location saved.' };
 }));
+ipcMain.handle('setLaunchArgs', wrap(async (v) => { S.launchArgs = String(v == null ? '' : v).trim(); saveSettings(); send(); }));
 ipcMain.handle('steamInfo', wrap(async () => ({ path: await launcher.findSteamExe({ configured: S.steamExe, gameDir: S.profiles[S.active].gameDir }) })));
 
 ipcMain.handle('launch', wrap(async () => {
@@ -480,7 +481,7 @@ ipcMain.handle('launch', wrap(async () => {
     log(`Preparing instance "${ci.name}"...`);
     const a = await prepareInstance(pid); send();
     log(a.already ? `Instance "${ci.name}" was already active.` : `Instance "${ci.name}" activated.`);
-    const res = await launcher.launchSequence({ exe, steamExe, log });
+    const res = await launcher.launchSequence({ exe, steamExe, log, args: launcher.parseArgs(S.launchArgs) });
     log(`Launched Project Zomboid with instance "${ci.name}".`);
     return { info: `Launched Project Zomboid with instance "${ci.name}".${res.steamStarted ? ' Steam was started first.' : ''}${a.backup ? ' Your previous Mods folder was kept as ' + a.backup + '.' : ''}${res.note ? ' ' + res.note : ''}` };
   } finally { launching = false; send(); }

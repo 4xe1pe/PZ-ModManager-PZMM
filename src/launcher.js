@@ -68,6 +68,19 @@ function spawnDetached(exe, args = []) {
 const spawnErr = (what, e) => err('Could not start ' + what + ' (' + (e.code || e.message) + '). ' +
   (e.code === 'ENOENT' ? 'The file does not exist.' : e.code === 'EACCES' || e.code === 'EPERM' ? 'Permission denied - the program may need to be run as administrator, or antivirus blocked it.' : e.code === 'UNKNOWN' ? 'Windows refused to start it (it may require administrator rights).' : e.message));
 
+/** Split a custom-arguments string into an argv array. Whitespace separates arguments; "..." or '...' group text containing spaces. Backslashes and other characters are kept literally. */
+function parseArgs(s) {
+  const out = []; let cur = '', has = false, q = '';
+  for (const ch of String(s || '')) {
+    if (q) { if (ch === q) q = ''; else cur += ch; }
+    else if (ch === '"' || ch === "'") { q = ch; has = true; }
+    else if (/\s/.test(ch)) { if (has || cur) out.push(cur); cur = ''; has = false; }
+    else cur += ch;
+  }
+  if (has || cur) out.push(cur);
+  return out;
+}
+
 /**
  * Order: (1) Steam if not already running, wait for it to initialise, (2) the game, directly.
  * All side effects are injectable so the sequence can be unit-tested.
@@ -76,7 +89,7 @@ async function launchSequence(o) {
   const d = Object.assign({
     isRunning: isProcessRunning, steamReady, sleep, log: () => {},
     startSteam: (exe) => spawnDetached(exe).catch((e) => { throw spawnErr('Steam', e); }),
-    startGame: (exe) => spawnDetached(exe).catch((e) => { throw spawnErr('Project Zomboid', e); }),
+    startGame: (exe, args) => spawnDetached(exe, args).catch((e) => { throw spawnErr('Project Zomboid', e); }),
     minWait: 5000, graceAfterReady: 3000, steamTimeout: 60000
   }, o);
   let steamStarted = false, note = '';
@@ -96,8 +109,8 @@ async function launchSequence(o) {
     else note = 'Steam did not finish logging in within ' + Math.round(d.steamTimeout / 1000) + ' s; the game was started anyway. If it complains about Steam, log in and start it again.';
   }
   d.log('Starting ' + path.basename(d.exe) + ' directly...');
-  await d.startGame(d.exe);
+  await d.startGame(d.exe, d.args || []);
   return { steamStarted, note };
 }
 
-module.exports = { isProcessRunning, anyRunning, findSteamExe, steamReady, launchSequence, spawnDetached, STEAM_PROC, GAME_PROCS };
+module.exports = { isProcessRunning, anyRunning, findSteamExe, steamReady, launchSequence, parseArgs, spawnDetached, STEAM_PROC, GAME_PROCS };

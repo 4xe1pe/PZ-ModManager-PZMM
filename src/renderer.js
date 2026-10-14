@@ -175,8 +175,9 @@ $('btnPush').onclick = async () => {
   modal('Push finished – instance “' + (r.instance || '') + '”', resultRows(r.results) + (r.note ? `<div style="margin-top:12px;color:#9aa3b5;white-space:normal">${esc(r.note)}</div>` : ''), [['OK', 1, 'primary']]);
 };
 $('btnSettings').onclick = async () => {
-  const S = st.settings, sx = await api.steamInfo(); const body = `<div class="row"><span>Steam (for launching)</span><span>${sx.path ? esc(sx.path) : '<b class="bad">not found</b>'}</span></div><div class="row"><span>SteamCMD</span><span>${st.steam ? esc(st.steam) : '<b class="bad">not found</b>'}</span></div><div class="row"><span>Library</span><span>${esc(S.library)}</span></div>`;
+  const S = st.settings, sx = await api.steamInfo(); const body = `<div class="row"><span>Steam (for launching)</span><span>${sx.path ? esc(sx.path) : '<b class="bad">not found</b>'}</span></div><div class="row"><span>SteamCMD</span><span>${st.steam ? esc(st.steam) : '<b class="bad">not found</b>'}</span></div><div class="row"><span>Library</span><span>${esc(S.library)}</span></div><div class="fld" style="margin-top:12px"><label>Custom launch arguments</label><input data-f="launchArgs" value="${esc(S.launchArgs || '')}" placeholder="-javaagent:ZombieBuddy.jar"><small>Passed to the game when launching. Separate arguments with spaces; use quotes for values containing spaces. Leave empty for a normal launch.</small></div>`;
   const r = await modal('Settings', body, [['Select steam.exe…', 'x'], ['Select SteamCMD…', 's'], ['Install SteamCMD', 'i'], ['Library folder…', 'l'], ['Close', 'c', 'primary']]);
+  if (r.f && r.f.launchArgs !== undefined && r.f.launchArgs.trim() !== (S.launchArgs || '').trim()) await api.setLaunchArgs(r.f.launchArgs);
   if (r.val === 'x') act(api.pickSteamExe()); if (r.val === 's') act(api.pickSteamcmd()); if (r.val === 'i') act(api.installSteamcmd(), 'Installing SteamCMD, see status bar…'); if (r.val === 'l') act(api.pickLibrary());
 };
 api.on('state', (s) => { st = s; render(); });

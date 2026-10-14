@@ -18,21 +18,24 @@ If you want to build it yourself or work on the code, follow the steps below.
 
 > `node_modules/` and `dist/` are not part of the repository. They are created on your machine by the steps below.
 
-## Quick build (recommended): `MAKE_EXE.bat`
+## Quick build (recommended): `BUILD_EXE.bat`
 
 1. Clone or download this repository and open the project folder (the one that contains `package.json`).
-2. Double-click **`MAKE_EXE.bat`**.
-3. Accept the administrator prompt. `electron-builder` needs it to create the executable.
-4. Wait for the script to finish. It will:
-   1. check that Node.js is installed (if it is missing, it installs it with `winget`; in that case close the window and run the script again),
-   2. run `npm install`,
-   3. build a **portable `.exe`** with the app icon.
+2. Double-click **`BUILD_EXE.bat`**.
+3. Accept the administrator prompt (it appears once). `electron-builder` needs it to create the executable.
+4. Wait for the script to finish. It does everything by itself:
+   1. checks that Node.js is installed and, if it is missing, installs it automatically (with `winget`, or by downloading the official installer) and keeps going, with no need to restart the script,
+   2. runs `npm install`,
+   3. builds a **portable `.exe`** with the app icon.
 5. When it is done, the `dist` folder opens automatically. The `.exe` inside it is the finished app: you can move it anywhere and run it with a double click.
+
+> **Important:** if you downloaded the repository as a ZIP, **extract it first**. Do not run the script from inside the ZIP file. If the window closes instantly or nothing happens, move the project to a simple folder with a plain name and no special characters, for example `C:\PZMM`, and run `BUILD_EXE.bat` again.
 
 ### Troubleshooting
 
-* **The icon is the default Electron one.** The script retries the build without editing the icon when the first attempt fails. To get the custom icon, enable *Developer Mode* in Windows (Settings → For developers) and run `MAKE_EXE.bat` again.
+* **The icon is the default Electron one.** The script retries the build without editing the icon when the first attempt fails. To get the custom icon, enable *Developer Mode* in Windows (Settings → For developers) and run `BUILD_EXE.bat` again.
 * **Build errors about `winCodeSign`.** The script already clears that cache. Run it again with administrator rights.
+* **The window closes instantly or nothing happens.** Extract the project to a simple path such as `C:\PZMM` (no spaces or special characters like `(` `)` `&`) and run `BUILD_EXE.bat` again. If it still fails, open Command Prompt, run `cd /d` followed by the project folder path, then run `BUILD_EXE.bat`, so the window stays open and you can read the error.
 * **Anything else.** Copy the text shown in the window and open an issue.
 
 ## Manual build (command line)
@@ -49,7 +52,7 @@ Then pick what you need:
 | --- | --- | --- |
 | Run the app in development mode | `npm start` | nothing, the app just opens |
 | Build an installer (NSIS) | `npm run dist` | `Setup` `.exe` installer, with a choice of install folder |
-| Build a portable `.exe` (same as `MAKE_EXE.bat`) | `npx electron-builder --win portable` | single `.exe`, no installation |
+| Build a portable `.exe` (same as `BUILD_EXE.bat`) | `npx electron-builder --win portable` | single `.exe`, no installation |
 
 If the build fails on code signing or on the icon, run the command in a terminal opened as administrator, or enable Windows Developer Mode.
 
@@ -69,6 +72,10 @@ Executables should not be committed to the repository. Build the `.exe`, then up
   detached process (working directory = game folder). The game is never started through Steam.
 * Steam is located via the Windows registry, the game folder (`...\Steam\steamapps\common\...`) or the default folders;
   override it in Settings → *Select steam.exe…*.
+* **Custom launch arguments:** in Settings → *Custom launch arguments* you can enter arguments that are passed to
+  `ProjectZomboid64.exe` when launching, for example `-javaagent:ZombieBuddy.jar`. Separate several arguments with spaces
+  and use quotes for a value that contains spaces. The setting is saved between sessions. If the field is empty, the game
+  is launched exactly as before.
 
 ## Instances
 An instance = its own folder with a `mods` folder (what the game sees) and a `library` folder (downloads + index).

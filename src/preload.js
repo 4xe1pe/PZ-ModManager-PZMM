@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   select: call('select'), checkUpdates: call('checkUpdates'), cancel: call('cancel'),
   instCreate: call('instCreate'), instRename: call('instRename'), instSelect: call('instSelect'), instDelete: call('instDelete'), instActivate: call('instActivate'),
   modsAll: call('modsAll'), modsMove: call('modsMove'), modsDelete: call('modsDelete'),
-  pickFolder: call('pickFolder'), pickExe: call('pickExe'), pickSteamExe: call('pickSteamExe'), steamInfo: call('steamInfo'), launch: call('launch'),
+  pickFolder: call('pickFolder'), pickExe: call('pickExe'), pickSteamExe: call('pickSteamExe'), steamInfo: call('steamInfo'), setLaunchArgs: call('setLaunchArgs'), launch: call('launch'),
   on: (ch, cb) => ipcRenderer.on(ch, (_e, d) => cb(d)),
   reply: (ch, v) => ipcRenderer.send(ch, v)
 });
