@@ -4,6 +4,11 @@ let st = null, curId = null, curTitle = '', forced = '';
 const wv = $('wv');
 let am = [], amRows = [], amSel = new Set(), amOpen = false, amBusy = false, amSig = '', amFilter = '', amTarget = '';
 
+/* ---------- row selection and update state (declared first: render() runs during load) ---------- */
+const Sel = window.Sel;
+let uSel = Sel.newState();
+const BUSY = ['Waiting', 'Downloading', 'Processing'];
+
 function toast(r, okMsg) {
   const m = r && r.error ? r.error : (r && r.info) || okMsg; if (!m) return;
   const t = $('toast'); t.textContent = m; t.className = r && r.error ? 'err' : ''; t.hidden = false;
@@ -32,7 +37,7 @@ function render() {
   const busy = st.busy;
   $('btnClear').disabled = busy; $('btnCancel').hidden = !busy; $('bar').className = busy ? 'run' : '';
   $('steamStatus').innerHTML = st.steam ? `SteamCMD: <span class="ok">ready</span> – ${esc(st.steam)}` : `SteamCMD: <span class="bad">not found</span> – open Settings`;
-  $('queue').innerHTML = st.queue.slice(-6).map((q) => `${esc(q.title)} (${q.wid}) → ${esc(q.iname || '')} – <b class="${q.status === 'Failed' ? 'bad' : q.status === 'Completed' ? 'ok' : ''}">${q.status}</b> ${esc(q.status === 'Failed' || q.status === 'Completed' ? q.msg || '' : q.line || '')}`).join('<br>');
+  $('queue').innerHTML = st.queue.slice(-6).map((q) => `${esc(q.title)} (${q.wid}) → ${esc(q.iname || '')} – <b class="${q.status === 'Failed' ? 'bad' : q.status === 'Completed' || q.status === 'Updated' ? 'ok' : ''}">${q.status}</b> ${esc(q.status === 'Failed' || q.status === 'Completed' || q.status === 'Updated' || q.status === 'Up to date' ? q.msg || '' : q.line || q.phase || '')}`).join('<br>');
   $('modCount').textContent = st.mods.length ? `(${st.mods.length})` : '';
   renderInst(); renderMods(); renderDetect(); amSync();
 }
@@ -66,16 +71,30 @@ function renderInst() {
   $('btnExe').onclick = () => act(api.pickExe());
 }
 function renderMods() {
-  if (!st.mods.length) { $('modTable').innerHTML = '<div class="empty">No mods in this instance yet.<br>Use the Workshop Browser and press Download.</div>'; return; }
+  uSel = Sel.prune(st.mods.map((m) => m.id), uSel);
+  if (!st.mods.length) { $('modTable').innerHTML = '<div class="empty">No mods in this instance yet.<br>Use the Workshop Browser and press Download.</div>'; updateSelBtn(); return; }
   $('modTable').innerHTML = `<table><tr><th></th><th>Mod name</th><th>Project Zomboid version</th><th>Download date</th><th>Status</th><th>Update status</th></tr>${st.mods.map((m) => {
     const s = m.status === 'Failed' ? 'Failed' : m.installed ? 'Installed' : 'Downloaded';
-    return `<tr><td><input type="checkbox" class="sel" data-id="${esc(m.id)}" ${m.selected ? 'checked' : ''}></td><td>${esc(m.title)}${m.name && m.name !== m.title ? `<br><small style="color:#7d8596">${esc(m.name)} · ${m.wid}</small>` : ''}${m.error ? `<br><small class="bad">${esc(m.error)}</small>` : ''}</td>
-    <td>${esc(st.settings.profiles[st.settings.active].name)}</td><td>${new Date(m.downloadedAt).toLocaleString()}</td><td><span class="badge b-${s}">${s}</span></td><td>${m.update ? '<span class="badge b-upd">Update available</span>' : '<span style="color:#7d8596">—</span>'}</td></tr>`; }).join('')}</table>`;
+    const busy = m.op && BUSY.includes(m.op.status);
+    const badge = m.update && !busy ? '<span class="b-upd-sm" title="A newer version is available on the Workshop">Update</span>' : '';
+    return `<tr data-id="${esc(m.id)}" class="${uSel.set.has(m.id) ? 'selrow' : ''}"><td><input type="checkbox" class="sel" data-id="${esc(m.id)}" ${m.selected ? 'checked' : ''}></td>
+    <td>${esc(m.title)}${badge}${m.name && m.name !== m.title ? `<br><small style="color:#7d8596">${esc(m.name)} · ${m.wid}</small>` : ''}${m.error ? `<br><small class="bad">${esc(m.error)}</small>` : ''}</td>
+    <td>${esc(st.settings.profiles[st.settings.active].name)}</td><td>${new Date(m.downloadedAt).toLocaleString()}</td><td><span class="badge b-${s}">${s}</span></td><td>${updateCell(m)}</td></tr>`;
+  }).join('')}</table>`;
   document.querySelectorAll('.sel').forEach((c) => (c.onchange = () => { const m = st.mods.find((x) => x.id === c.dataset.id); m.selected = c.checked; api.select(c.dataset.id, c.checked); }));
+  updateSelBtn();
+}
+function updateCell(m) {
+  const op = m.op || {};
+  if (BUSY.includes(op.status)) return `<span class="badge b-Updating">⏳ ${esc(op.status === 'Waiting' ? 'Queued' : op.phase || 'Updating')}</span>`;
+  if (op.status === 'Failed') return `<span class="badge b-Failed">Update failed</span><br><small class="bad">${esc(op.msg)}</small>`;
+  if (op.status === 'Updated') return `<span class="badge b-Updated">Updated</span><br><small style="color:#7d8596">${esc(op.msg)}</small>`;
+  if (op.status === 'Up to date' && op.msg) return `<small style="color:#7d8596">${esc(op.msg)}</small>`;
+  return '<span style="color:#7d8596">—</span>';
 }
 function renderDetect() {
   const id = curId; if (!id) { $('detect').textContent = 'Browse the Workshop – open a mod page and its ID is picked up automatically.'; return; }
-  const m = st.mods.find((x) => x.wid === id), q = st.queue.find((x) => x.wid === id && x.iid === curInst().id && ['Waiting', 'Downloading', 'Processing'].includes(x.status));
+  const m = st.mods.find((x) => x.wid === id), q = st.queue.find((x) => x.wid === id && x.iid === curInst().id && BUSY.includes(x.status));
   const state = q ? q.status : !m ? 'Not downloaded' : m.status === 'Failed' ? 'Failed' : m.installed ? 'Installed' : 'Downloaded';
   $('detect').innerHTML = `<b>${esc(curTitle)}</b> <span style="color:#7d8596">ID ${id}</span> <span class="badge b-${state === 'Not downloaded' ? 'wait' : state === 'Installed' ? 'Installed' : state === 'Failed' ? 'Failed' : 'Downloaded'}">${state}</span>${m && m.update ? '<span class="badge b-upd">Update available</span>' : ''}`;
 }
@@ -99,7 +118,7 @@ async function loadAllMods() {
 }
 function amSync() {
   if (!amOpen) return;
-  const sig = JSON.stringify([st.busy, st.settings.instances, st.mods.map((m) => [m.id, m.status, m.installed]), st.queue.map((q) => q.status)]);
+  const sig = JSON.stringify([st.busy, st.settings.instances, st.mods.map((m) => [m.id, m.status, m.installed, m.update]), st.queue.map((q) => q.status)]);
   if (sig !== amSig) { amSig = sig; loadAllMods(); }
 }
 function amBar() {
@@ -180,6 +199,41 @@ $('btnSettings').onclick = async () => {
   if (r.f && r.f.launchArgs !== undefined && r.f.launchArgs.trim() !== (S.launchArgs || '').trim()) await api.setLaunchArgs(r.f.launchArgs);
   if (r.val === 'x') act(api.pickSteamExe()); if (r.val === 's') act(api.pickSteamcmd()); if (r.val === 'i') act(api.installSteamcmd(), 'Installing SteamCMD, see status bar…'); if (r.val === 'l') act(api.pickLibrary());
 };
+
+/* ---------- selection (Ctrl/Shift+click, Ctrl+A) and Update selected ---------- */
+function paintSel() { document.querySelectorAll('#modTable tr[data-id]').forEach((tr) => tr.classList.toggle('selrow', uSel.set.has(tr.dataset.id))); }
+function updateSelBtn() {
+  const b = $('btnUpdateSel'); if (!b || !st) return;
+  const n = st.mods.filter((m) => uSel.set.has(m.id) && m.wid && m.status !== 'Failed').length;
+  b.disabled = !n;
+  b.textContent = n ? `⟳ Update selected (${n})` : '⟳ Update selected';
+  paintSel();
+}
+$('modTable').addEventListener('mousedown', (e) => { // shift+click selects rows without selecting text
+  if (e.shiftKey && e.target.closest('tr[data-id]') && !e.target.closest('input,button,select')) e.preventDefault();
+});
+$('modTable').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-id]');
+  if (!tr || !st || e.target.closest('input,button,select,label')) return;
+  uSel = Sel.clickRow(st.mods.map((m) => m.id), uSel, tr.dataset.id, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
+  updateSelBtn();
+});
+document.addEventListener('keydown', (e) => {
+  if (!st || $('modsView').hidden) return;
+  const k = e.key.toLowerCase();
+  if (k === 'escape') { uSel = Sel.newState(); updateSelBtn(); return; }
+  if (!((e.ctrlKey || e.metaKey) && k === 'a')) return;
+  const t = document.activeElement; // keep Ctrl+A for text fields; checkboxes are fine
+  if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && t.type !== 'checkbox'))) return;
+  e.preventDefault();
+  uSel = Sel.selectAll(st.mods.map((m) => m.id), uSel); updateSelBtn();
+});
+$('btnUpdateSel').onclick = () => {
+  const ids = [...uSel.set];
+  if (!ids.length) return toast({ error: 'Select one or more mods first (Ctrl+click, Shift+click or Ctrl+A).' });
+  act(api.updateSelected(ids));
+};
+
 api.on('state', (s) => { st = s; render(); });
 api.on('log', (l) => { $('logline').textContent = l; });
 api.on('conflict', async (d) => {

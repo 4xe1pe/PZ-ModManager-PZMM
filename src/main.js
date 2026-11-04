@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path'), fs = require('fs'), fsp = fs.promises, cp = require('child_process');
 const https = require('https'), crypto = require('crypto');
 const instLib = require('./instances'), launcher = require('./launcher'), modOps = require('./mods');
+const U = require('./updates');
+const BUSY_STATES = ['Waiting', 'Downloading', 'Processing'];
 const APPID = '108600';
 let win, S, mods = [], queue = [], running = false, installed = {}, proc = null, logs = [], launching = false;
 
@@ -68,14 +70,22 @@ function exeFor(pid) {
   if (p.gameDir) { const e = path.join(p.gameDir, 'ProjectZomboid64.exe'); if (fs.existsSync(e)) return e; }
   return '';
 }
-const hasUpdate = (m) => !!(m.remoteUpdated && m.remoteUpdated * 1000 > m.downloadedAt && m.status !== 'Failed');
+const hasUpdate = U.updateAvailable;
+function opFor(m, ci) { // latest update job for this item in the active instance
+  if (!m.wid || m.wid === 'local') return null;
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const q = queue[i];
+    if (q.kind === 'update' && q.wid === m.wid && q.pid === S.active && q.iid === ci.id) return { status: q.status, phase: q.phase || '', msg: q.msg || '' };
+  }
+  return null;
+}
 function pub() {
   const ci = getInst(), p = S.profiles[S.active], exe = exeFor(S.active), li = instLib.linkInfo(p.modsDir || '');
   return {
     settings: S, busy: running, queue, logs: logs.slice(-40), steam: findSteamcmd(), launching,
     instance: { id: ci.id, name: ci.name, dir: ci.dir, modsDir: ci.modsDir, linked: instLib.isLinkedTo(p.modsDir, ci.modsDir), linkKind: li.kind },
     exe, exeExists: !!exe && fs.existsSync(exe),
-    mods: mods.map((m) => ({ ...m, installed: !!installed[m.id], update: hasUpdate(m) }))
+    mods: mods.map((m) => ({ ...m, installed: !!installed[m.id], update: hasUpdate(m), op: opFor(m, ci) }))
   };
 }
 const send = () => win && win.webContents.send('state', pub());
@@ -92,14 +102,7 @@ function findSteamcmd() {
   }
   return '';
 }
-async function hashDir(d) {
-  const h = crypto.createHash('sha1');
-  const walk = async (p, rel) => {
-    const es = (await fsp.readdir(p, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : 1));
-    for (const e of es) { const r = rel + '/' + e.name; h.update(r); if (e.isDirectory()) await walk(path.join(p, e.name), r); else h.update(await fsp.readFile(path.join(p, e.name))); }
-  };
-  await walk(d, ''); return h.digest('hex');
-}
+const hashDir = U.hashDir;
 async function dirSize(d) { let t = 0; try { for (const e of await fsp.readdir(d, { withFileTypes: true })) { const p = path.join(d, e.name); t += e.isDirectory() ? await dirSize(p) : (await fsp.stat(p)).size; } } catch {} return t; }
 const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
 const inside = (child, parent) => { const r = path.relative(parent, child); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); };
@@ -157,19 +160,7 @@ function runSteam(exe, wid, onLine) {
     p.on('close', (code) => { proc = null; res({ out, code }); });
   });
 }
-async function runJob(j) {
-  const exe = findSteamcmd();
-  if (!exe) throw err('SteamCMD was not found. Open Settings to select it or let the app install it.');
-  try { touchInstance(getInst(j.pid, j.iid)); } catch { throw err('Cannot write to the instance folder. Pick another one in Settings or create a new instance elsewhere.'); }
-  j.status = 'Downloading'; send();
-  let title = j.wid, upd = 0;
-  try {
-    const [d] = await details([j.wid]);
-    if (d.result !== 1) throw err(`Workshop item ${j.wid} does not exist or is private. Check the ID/URL.`);
-    title = d.title; upd = d.time_updated;
-  } catch (e) { if (e.human) throw e; log('Could not query Steam Web API: ' + e.message); }
-  j.title = title;
-  const src = path.join(path.dirname(exe), 'steamapps', 'workshop', 'content', APPID, j.wid);
+async function steamDownload(j, exe) {
   let r;
   for (let attempt = 1; attempt <= 2; attempt++) {
     r = await runSteam(exe, j.wid, (l) => { j.line = l.slice(0, 160); log(l); send(); });
@@ -179,8 +170,24 @@ async function runJob(j) {
   }
   if (j.cancelled) throw err('Download cancelled.');
   if (!/Success\. Downloaded item/i.test(r.out)) throw err(steamErr(r.out) || `SteamCMD finished without downloading the item (exit code ${r.code}). Retry, or use Clear Cache.`);
-  j.status = 'Processing'; send();
+  const src = path.join(path.dirname(exe), 'steamapps', 'workshop', 'content', APPID, j.wid);
   if (!fs.existsSync(src)) throw err('SteamCMD reported success but the downloaded files are missing (' + src + ').');
+  return src;
+}
+async function runJob(j) {
+  const exe = findSteamcmd();
+  if (!exe) throw err('SteamCMD was not found. Open Settings to select it or let the app install it.');
+  try { touchInstance(getInst(j.pid, j.iid)); } catch { throw err('Cannot write to the instance folder. Pick another one in Settings or create a new instance elsewhere.'); }
+  j.status = 'Downloading'; send();
+  let title = j.wid, upd = 0, snap = null;
+  try {
+    const [d] = await details([j.wid]);
+    if (d.result !== 1) throw err(`Workshop item ${j.wid} does not exist or is private. Check the ID/URL.`);
+    title = d.title; upd = d.time_updated; snap = U.snapOf(d);
+  } catch (e) { if (e.human) throw e; log('Could not query Steam Web API: ' + e.message); }
+  j.title = title;
+  const src = await steamDownload(j, exe);
+  j.status = 'Processing'; send();
   const found = await findMods(src);
   if (!found.length) throw err('The download contains no valid Project Zomboid mod (no mod.info found). It may be a map/collection or a partial download.');
   const idx = (await readIdx(j.pid, j.iid)).filter((m) => m.wid !== j.wid);
@@ -188,7 +195,8 @@ async function runJob(j) {
   await fsp.rm(base, { recursive: true, force: true });
   for (const f of found) {
     await fsp.cp(f.dir, safeChild(base, f.name), { recursive: true });
-    idx.push({ id: j.wid + '/' + f.name, wid: j.wid, name: f.name, title: f.title, workshopTitle: title, status: 'Downloaded', downloadedAt: Date.now(), remoteUpdated: upd, selected: true });
+    idx.push({ id: j.wid + '/' + f.name, wid: j.wid, name: f.name, title: f.title, workshopTitle: title, status: 'Downloaded',
+      downloadedAt: Date.now(), remoteUpdated: upd, snapDl: snap, snapSeen: snap, selected: true });
   }
   await writeIdx(j.pid, j.iid, idx); if (isCur(j)) mods = idx;
   j.msg = found.length > 1 ? `${found.length} mods found - untick the ones you don't want before pushing.` : 'OK';
@@ -197,12 +205,19 @@ async function processQueue() {
   if (running) return; running = true; send();
   while (true) {
     const j = queue.find((q) => q.status === 'Waiting'); if (!j) break;
-    try { await runJob(j); j.status = 'Completed'; }
-    catch (e) {
-      j.status = 'Failed'; j.msg = e.human ? e.message : 'Unexpected error: ' + e.message; log('FAILED ' + j.wid + ': ' + j.msg);
-      const idx = (await readIdx(j.pid, j.iid)).filter((m) => m.wid !== j.wid);
-      idx.push({ id: j.wid + '/_failed', wid: j.wid, name: '', title: j.title || j.wid, status: 'Failed', downloadedAt: Date.now(), error: j.msg, selected: false });
-      await writeIdx(j.pid, j.iid, idx); if (isCur(j)) mods = idx;
+    try {
+      if (j.kind === 'update') await runUpdateJob(j);
+      else { await runJob(j); j.status = 'Completed'; }
+    } catch (e) {
+      j.status = 'Failed'; j.phase = ''; j.msg = e.human ? e.message : 'Unexpected error: ' + e.message;
+      log('FAILED ' + j.wid + ': ' + j.msg);
+      // A failed NEW download gets a placeholder entry. A failed UPDATE never touches the index:
+      // the working copy stays listed exactly as before.
+      if (j.kind !== 'update') {
+        const idx = (await readIdx(j.pid, j.iid)).filter((m) => m.wid !== j.wid);
+        idx.push({ id: j.wid + '/_failed', wid: j.wid, name: '', title: j.title || j.wid, status: 'Failed', downloadedAt: Date.now(), error: j.msg, selected: false });
+        await writeIdx(j.pid, j.iid, idx); if (isCur(j)) mods = idx;
+      }
     }
     await refreshInstalled(); send();
   }
@@ -284,19 +299,23 @@ ipcMain.handle('download', wrap(async (input) => {
   const wid = parseId(input);
   if (!wid) throw err('That is not a valid Workshop URL or ID. Paste a link like https://steamcommunity.com/sharedfiles/filedetails/?id=1234567890 or just the number.');
   const ci = getInst();
-  if (queue.some((q) => q.wid === wid && q.pid === S.active && q.iid === ci.id && ['Waiting', 'Downloading', 'Processing'].includes(q.status))) throw err('This item is already in the queue.');
+  if (queue.some((q) => q.wid === wid && q.pid === S.active && q.iid === ci.id && BUSY_STATES.includes(q.status))) throw err('This item is already in the queue.');
   queue = queue.filter((q) => !(q.wid === wid && q.pid === S.active && q.iid === ci.id)); queue.push({ wid, pid: S.active, iid: ci.id, iname: ci.name, title: wid, status: 'Waiting' });
   send(); processQueue(); return { info: `Added to download queue for instance "${ci.name}".` };
 }));
 ipcMain.handle('cancel', wrap(async () => { queue.forEach((q) => { if (q.status === 'Waiting') { q.status = 'Failed'; q.msg = 'Cancelled'; } if (q.status === 'Downloading') q.cancelled = true; }); if (proc) proc.kill(); send(); }));
 ipcMain.handle('select', wrap(async (id, v) => { const m = mods.find((x) => x.id === id); if (m) { m.selected = v; await saveMods(); } }));
 ipcMain.handle('checkUpdates', wrap(async () => {
-  const ids = [...new Set(mods.filter((m) => m.status !== 'Failed').map((m) => m.wid))]; if (!ids.length) return { info: 'No mods to check.' };
+  const ids = [...new Set(mods.filter((m) => m.status !== 'Failed' && m.wid !== 'local').map((m) => m.wid))]; if (!ids.length) return { info: 'No mods to check.' };
   let d; try { d = await details(ids); } catch (e) { throw err('Could not check updates: ' + e.message); }
-  for (const x of d) if (x.result === 1) mods.filter((m) => m.wid === String(x.publishedfileid)).forEach((m) => (m.remoteUpdated = x.time_updated));
+  for (const x of d) {
+    if (x.result !== 1) continue;
+    const snap = U.snapOf(x);
+    if (snap) mods.filter((m) => m.wid === String(x.publishedfileid)).forEach((m) => (m.snapSeen = snap));
+  }
   await saveMods(); send();
-  const n = new Set(mods.filter((m) => m.remoteUpdated * 1000 > m.downloadedAt).map((m) => m.wid)).size;
-  return { info: n ? `${n} Workshop item(s) have updates. Re-download them to update.` : 'Everything is up to date.' };
+  const n = new Set(mods.filter(hasUpdate).map((m) => m.wid)).size;
+  return { info: n ? `${n} Workshop item(s) have updates. Select them and press "Update selected".` : 'Everything is up to date.' };
 }));
 ipcMain.handle('push', wrap(async () => {
   const p = S.profiles[S.active], ci = getInst(), dir = ci.modsDir;
@@ -426,7 +445,7 @@ ipcMain.handle('instActivate', wrap(async () => {
 ipcMain.handle('instDelete', wrap(async (id) => {
   const pid = S.active, i = getInst(pid, id), L = S.instances[pid];
   if (L.length <= 1) throw err('Each version profile needs at least one instance. Create another one before deleting this one.');
-  if (queue.some((q) => q.iid === i.id && ['Waiting', 'Downloading', 'Processing'].includes(q.status))) throw err('A download for this instance is still running. Wait for it or cancel it first.');
+  if (queue.some((q) => q.iid === i.id && BUSY_STATES.includes(q.status))) throw err('A download for this instance is still running. Wait for it or cancel it first.');
   if (modLinks().some((l) => instLib.isLinkedTo(l, i.modsDir))) throw err(`"${i.name}" is the instance currently active in the game's Mods folder. Activate or launch another instance first.`);
   const r = await dialog.showMessageBox(win, { type: 'warning', buttons: ['Remove from app only (keep files)', 'Delete instance and its files', 'Cancel'], defaultId: 2, cancelId: 2, title: 'Delete instance',
     message: `Delete the instance "${i.name}"?`, detail: `Mods folder:\n${i.modsDir}\nDownload library:\n${i.libDir}\n\n"Delete ... files" permanently removes those two folders. "Keep files" only forgets the instance in this app. Other instances are never touched.` });
@@ -498,7 +517,7 @@ async function withModsLock(insts, fn) {
   modsBusy = true;
   try {
     if (launching) throw err('A launch is in progress. Wait for it to finish.');
-    if (queue.some((q) => insts.some((i) => i.id === q.iid) && ['Waiting', 'Downloading', 'Processing'].includes(q.status))) throw err('A download for one of these instances is still running. Wait for it or cancel it first.');
+    if (queue.some((q) => insts.some((i) => i.id === q.iid) && BUSY_STATES.includes(q.status))) throw err('A download for one of these instances is still running. Wait for it or cancel it first.');
     const g = await launcher.anyRunning(launcher.GAME_PROCS);
     if (g && insts.some((i) => modLinks().some((l) => instLib.isLinkedTo(l, i.modsDir)))) throw err(`${g} is running and is using one of these instances. Close the game first.`);
     return await fn();
@@ -528,6 +547,97 @@ ipcMain.handle('modsDelete', wrap(async (items, mode) => {
   const list = (items || []).map((x) => ({ inst: locate(x.iid), id: x.id }));
   if (!list.length) throw err('Select the mods you want to delete first.');
   return withModsLock(list.map((x) => x.inst), async () => ({ results: await modOps.deleteMods(list, mode, modDeps) }));
+}));
+
+/* ---------- updates: replace installed Workshop items with their latest version, safely ---------- */
+const setPhase = (j, phase, status) => { j.phase = phase; if (status) j.status = status; send(); };
+
+async function rememberSeen(j, snap) {
+  if (!snap) return;
+  const next = (await readIdx(j.pid, j.iid)).map((m) => (m.wid === j.wid && m.status === 'Downloaded' ? { ...m, snapSeen: snap } : m));
+  await writeIdx(j.pid, j.iid, next); if (isCur(j)) mods = next;
+}
+
+async function writeUpdateIndex(j, snap, workshopTitle, found, { changed, added }) {
+  const now = Date.now(), ch = new Set(changed);
+  const next = (await readIdx(j.pid, j.iid)).map((m) => (m.wid === j.wid && m.status === 'Downloaded'
+    ? { ...m, snapDl: snap || m.snapDl || null, snapSeen: snap || m.snapSeen || null, downloadedAt: ch.has(m.name) ? now : m.downloadedAt }
+    : m));
+  for (const name of added) {
+    const f = found.find((x) => x.name === name);
+    next.push({ id: j.wid + '/' + name, wid: j.wid, name, title: (f && f.title) || name, workshopTitle, status: 'Downloaded',
+      downloadedAt: now, snapDl: snap, snapSeen: snap, selected: true });
+  }
+  await writeIdx(j.pid, j.iid, next); if (isCur(j)) mods = next;
+}
+
+async function runUpdateJob(j) {
+  const exe = findSteamcmd();
+  if (!exe) throw err('SteamCMD was not found. Open Settings to select it or let the app install it.');
+  const ci = getInst(j.pid, j.iid);
+  const g = await launcher.anyRunning(launcher.GAME_PROCS);
+  if (g && modLinks().some((l) => instLib.isLinkedTo(l, ci.modsDir))) throw err(`${g} is running and uses this instance. Close the game first - its mod files cannot be replaced safely.`);
+  try { touchInstance(ci); } catch { throw err('Cannot write to the instance folder. Pick another one in Settings.'); }
+
+  setPhase(j, 'Checking Steam', 'Processing');
+  const targets = (await readIdx(j.pid, j.iid)).filter((m) => m.wid === j.wid && m.status === 'Downloaded');
+  if (!targets.length) throw err('This item is no longer in the instance list. Nothing was changed.');
+  let d;
+  try { [d] = await details([j.wid]); }
+  catch (e) { throw err('Could not reach Steam to check for updates: ' + e.message + ' Your current copy was kept.'); }
+  if (!d || d.result !== 1) throw err(`Workshop item ${j.wid} no longer exists or is private. Your current copy was kept.`);
+  j.title = d.title || j.title;
+  const remote = U.snapOf(d);
+  if (!remote || !remote.manifest) log(`Steam returned no content manifest for ${j.wid}; comparing update times instead.`);
+
+  // Fresh check: nothing newer on Steam means no download at all.
+  if (!targets.some((t) => U.isNewer(U.downloadedSnap(t), remote))) {
+    await rememberSeen(j, remote);
+    j.status = 'Up to date'; j.phase = ''; j.msg = 'Already the latest version.';
+    return;
+  }
+
+  setPhase(j, 'Downloading from Steam', 'Downloading');
+  const src = await steamDownload(j, exe);
+  setPhase(j, 'Verifying', 'Processing');
+  const found = await findMods(src);
+  if (!found.length) throw err('The downloaded item contains no valid Project Zomboid mod (no mod.info). Your current copy was kept.');
+
+  const base = libDir(j.pid, j.iid), stamp = Date.now();
+  const res = await U.performUpdate({
+    wid: j.wid, libDir: base, modsDir: ci.modsDir, found, targets,
+    stageRoot: path.join(base, '.update-staging', `${j.wid}-${stamp}`),
+    stashRoot: path.join(base, '.update-backup', `${j.wid}-${stamp}`),
+    onPhase: (p) => setPhase(j, p, 'Processing'),
+    commit: (r) => writeUpdateIndex(j, remote, d.title, found, r),
+  });
+  j.phase = '';
+  j.status = res.changed.length ? 'Updated' : 'Up to date';
+  j.msg = res.changed.length
+    ? `Updated: ${res.changed.join(', ')}.` + (res.added.length ? ` New: ${res.added.join(', ')}.` : '') +
+      (res.keptBackups.length ? ` Your edited installed copy was kept in ${res.keptBackups[0]}.` : '')
+    : 'Content unchanged - already the latest version.';
+}
+
+ipcMain.handle('updateSelected', wrap(async (ids) => {
+  if (launching) throw err('A launch is in progress. Try again when it has finished.');
+  const ci = getInst();
+  const sel = mods.filter((m) => (ids || []).includes(m.id));
+  if (!sel.length) throw err('Select one or more mods first (Ctrl+click, Shift+click or Ctrl+A).');
+  const wids = [...new Set(sel.filter((m) => m.wid && m.wid !== 'local' && m.status !== 'Failed').map((m) => m.wid))];
+  if (!wids.length) throw err('The selected mods cannot be updated from the Workshop (failed downloads or local mods).');
+  const mine = (q, wid) => q.wid === wid && q.pid === S.active && q.iid === ci.id;
+  let queued = 0; const busy = [];
+  for (const wid of wids) {
+    if (queue.some((q) => mine(q, wid) && BUSY_STATES.includes(q.status))) { busy.push(wid); continue; }
+    const title = (mods.find((m) => m.wid === wid) || {}).title || wid;
+    queue = queue.filter((q) => !(mine(q, wid) && q.kind === 'update')); // replace the finished entry
+    queue.push({ kind: 'update', wid, pid: S.active, iid: ci.id, iname: ci.name, title, status: 'Waiting', phase: 'Queued' });
+    queued++;
+  }
+  send(); processQueue();
+  const skipped = sel.some((m) => !m.wid || m.wid === 'local' || m.status === 'Failed') ? ' Failed or local entries were skipped.' : '';
+  return { info: [queued && `${queued} Workshop item(s) queued for update.`, busy.length && `${busy.length} already in progress.`].filter(Boolean).join(' ') + skipped };
 }));
 
 /* ---------- window ---------- */

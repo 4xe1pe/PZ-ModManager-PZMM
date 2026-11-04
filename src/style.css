@@ -25,3 +25,7 @@ button.mini{padding:3px 8px;font-size:11px}.fld{margin-bottom:12px}.fld label{di
 .box h3{margin:0 0 10px}#mBtns{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}#mBody{white-space:pre-wrap;line-height:1.5}.row{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
 #toast{position:fixed;bottom:110px;left:50%;transform:translateX(-50%);background:#2f333d;padding:10px 18px;border-radius:8px;z-index:10;max-width:70%;box-shadow:0 4px 18px #0008}#toast.err{background:#7a2a2f}
 #amTable{flex:1;min-height:0;overflow:auto;padding:12px}.bar button.danger{margin-top:0}.b-Missing{background:#7a5a13;color:#ffd77a}
+tr[data-id]{user-select:none}
+tr.selrow td{background:#26324a}
+.b-upd-sm{margin-left:6px;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;background:#7a5a13;color:#ffd77a;vertical-align:middle}
+.b-Updating{background:#1f4a66;color:#9fd8ff}.b-Updated{background:#1d5a40;color:#8ff0bf}
