@@ -1,40 +1,195 @@
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; frame-src https:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="style.css"><title>Project Zomboid Mod Manager</title></head><body>
+
+<!-- Shared line icons (24×24, stroke-based) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+ <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+ <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
+ <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M4.5 19.5h15"/></symbol>
+ <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 20V9m0 0-4.5 4.5M12 9l4.5 4.5M4.5 4.5h15"/></symbol>
+ <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4.5V11h-6.5"/></symbol>
+ <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+ <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z M12 12l8-4.5M12 12v9M12 12 4 7.5"/></symbol>
+ <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></symbol>
+ <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+ <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></symbol>
+ <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5"/></symbol>
+ <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8.5M6.4 6.4a8 8 0 1 0 11.2 0"/></symbol>
+ <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+ <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+ <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+ <symbol id="i-back" viewBox="0 0 24 24"><path d="M14.5 6 8.5 12l6 6"/></symbol>
+ <symbol id="i-fwd" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"/></symbol>
+ <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11 12 4l8 7M6 10v10h12V10"/></symbol>
+ <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor"/></symbol>
+ <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+ <symbol id="i-cog" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></symbol>
+</svg>
+
 <div id="app">
- <aside id="side">
-  <div class="brand">🧟 PZ Mod Manager</div>
-  <div class="lbl">Version profiles</div><div id="profiles"></div>
-  <div class="lbl">Active profile</div>
-  <div class="card" id="paths"></div>
-  <button class="link" id="btnSettings">⚙ Settings</button>
- </aside>
+
+ <!-- Top toolbar: primary actions -->
+ <header id="toolbar">
+  <div class="brand"><div class="tile brand-tile">PZ</div><div><b>Mod Manager</b><small>Project Zomboid</small></div></div>
+  <span class="tb-sep"></span>
+  <button id="tbNew" class="tb" title="Add a new instance"><svg class="ic"><use href="#i-plus"/></svg>Add instance</button>
+  <button id="btnLaunch" class="tb launch" title="Launch Project Zomboid with the selected instance"><svg class="ic"><use href="#i-play"/></svg>Launch</button>
+  <button id="btnDownload" class="tb primary" title="Download the Workshop mod on the current page or pasted link"><svg class="ic"><use href="#i-download"/></svg>Download</button>
+  <button id="btnPush" class="tb" title="Copy the selected instance's mods into Project Zomboid"><svg class="ic"><use href="#i-upload"/></svg>Push to Project Zomboid</button>
+  <span class="grow"></span>
+  <button id="btnSettings" class="tb ghost" title="Settings"><svg class="ic"><use href="#i-cog"/></svg>Settings</button>
+ </header>
+
+ <!-- Left sidebar: sections, profiles, instance browser -->
+ <nav id="side">
+  <div class="side-h">Library</div>
+  <button class="nav-item on" data-s="mods"><svg class="ic"><use href="#i-box"/></svg><span>Mods</span><span id="modCount" class="count"></span></button>
+  <button class="nav-item" data-s="browser"><svg class="ic"><use href="#i-globe"/></svg><span>Workshop browser</span></button>
+  <button class="nav-item" id="btnAllMods" data-s="all"><svg class="ic"><use href="#i-list"/></svg><span>All mods</span></button>
+
+  <div class="side-h">Version</div>
+  <div id="profiles" class="seg-group"></div>
+
+  <div class="side-h side-h-row"><span>Instances</span><button id="iNew" class="icon-btn" title="New instance"><svg class="ic"><use href="#i-plus"/></svg></button></div>
+  <div id="instList" class="inst-list" role="listbox" aria-label="Instances"></div>
+
+  <details class="side-group">
+   <summary>Game setup</summary>
+   <div id="paths"></div>
+  </details>
+ </nav>
+ <div id="rzL" class="rz" title="Drag to resize the sidebar"></div>
+
+ <!-- Main content -->
  <main id="center">
-  <div id="instbar" class="instbar"></div>
-  <div class="tabs"><button class="tab on" data-t="browser">Workshop Browser</button><button class="tab" data-t="mods">Mods <span id="modCount"></span></button></div>
-  <section id="browser">
-   <div class="bar"><button id="back">◀</button><button id="fwd">▶</button><button id="home">⌂</button>
-    <input id="paste" placeholder="Paste a Workshop URL or ID…"><button id="addPaste" class="primary">Add</button></div>
+
+  <section id="modsView">
+   <div class="view-head">
+    <div class="vh-title"><h2 id="modsTitle">Mods</h2><div id="modsSub" class="muted"></div></div>
+    <span class="grow"></span>
+    <button id="btnUpdates"><svg class="ic"><use href="#i-refresh"/></svg>Check for updates</button>
+    <button id="btnRemove" class="danger-ghost"><svg class="ic"><use href="#i-trash"/></svg>Remove selected</button>
+   </div>
+   <div class="toolbar-row">
+    <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="modSearch" type="search" placeholder="Search by name or Workshop ID" autocomplete="off"></label>
+    <select id="modFilter" class="sel-sm" title="Filter by state">
+     <option value="all">All states</option>
+     <option value="installed">Installed</option>
+     <option value="downloaded">Downloaded</option>
+     <option value="failed">Failed</option>
+     <option value="update">Update available</option>
+    </select>
+   </div>
+   <div id="modTable" class="table-wrap"></div>
+  </section>
+
+  <section id="browser" hidden>
+   <div class="view-head">
+    <div class="vh-title"><h2>Workshop browser</h2><div class="muted">Open a mod page, or paste a link or ID, then download it into the selected instance.</div></div>
+   </div>
+   <div class="toolbar-row">
+    <button id="back" class="icon-btn" title="Back"><svg class="ic"><use href="#i-back"/></svg></button>
+    <button id="fwd" class="icon-btn" title="Forward"><svg class="ic"><use href="#i-fwd"/></svg></button>
+    <button id="home" class="icon-btn" title="Workshop home"><svg class="ic"><use href="#i-home"/></svg></button>
+    <input id="paste" class="grow-in" placeholder="Paste a Workshop URL or ID…">
+    <button id="addPaste" class="primary">Add to queue</button>
+   </div>
    <webview id="wv" src="https://steamcommunity.com/app/108600/workshop/" allowpopups></webview>
    <div id="detect" class="detect">Browse the Workshop – open a mod page and its ID is picked up automatically.</div>
   </section>
-  <section id="modsView" hidden><div id="modTable"></div></section>
-  <section id="allModsView" hidden><div id="amBar" class="bar"></div><div id="amTable"></div></section>
+
+  <section id="allModsView" hidden>
+   <div class="view-head">
+    <div class="vh-title"><h2>All mods</h2><div class="muted">Every mod across all instances and version profiles.</div></div>
+    <span class="grow"></span>
+    <span id="amCount" class="muted"></span>
+   </div>
+   <div class="toolbar-row">
+    <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="amSearch" type="search" placeholder="Search by name or Workshop ID" autocomplete="off"></label>
+    <select id="amFilter" class="sel-md" title="Show mods from this instance"></select>
+    <select id="amStatus" class="sel-sm" title="Filter by state">
+     <option value="all">All states</option>
+     <option value="installed">Installed</option>
+     <option value="downloaded">Downloaded</option>
+     <option value="failed">Failed</option>
+     <option value="missing">Files missing</option>
+     <option value="update">Update available</option>
+    </select>
+    <span class="grow"></span>
+    <span class="muted">Move to</span>
+    <select id="amTarget" class="sel-md" title="Target instance"></select>
+    <button id="amMove" class="accent"><svg class="ic"><use href="#i-download"/></svg>Move</button>
+    <button id="amDel" class="danger-ghost"><svg class="ic"><use href="#i-trash"/></svg>Delete…</button>
+   </div>
+   <div id="amTable" class="table-wrap"></div>
+  </section>
+
  </main>
- <aside id="actions">
-  <button id="btnLaunch" class="big launch">▶ Launch Project Zomboid</button>
-  <div id="launchInfo" class="launchInfo"></div>
-  <button id="btnDownload" class="big primary">⬇ Download</button>
-  <button id="btnPush" class="big accent">➜ Push to Project Zomboid</button>
-  <button id="btnRemove" class="big">🗑 Remove selected…</button>
-  <button id="btnUpdates" class="big">⟳ Check for updates</button>
-  <button id="btnUpdateSel" class="big accent" disabled>⟳ Update selected</button>
-  <button id="btnAllMods" class="big">🗂 Mods · all instances</button>
-  <button id="btnClear" class="big danger">Clear Cache</button>
-  <button id="btnCancel" class="big" hidden>■ Cancel downloads</button>
+ <div id="rzR" class="rz" title="Drag to resize the details panel"></div>
+
+ <!-- Right: details of the selected instance -->
+ <aside id="details">
+  <div class="det-head">
+   <div id="detTile" class="tile lg">PZ</div>
+   <div class="det-title"><h2 id="detName">—</h2><div id="detSub" class="muted"></div></div>
+  </div>
+  <div id="detChip" class="chip"></div>
+
+  <dl class="kv">
+   <dt>Game version</dt><dd id="detVer">—</dd>
+   <dt>Mods</dt><dd id="detMods">—</dd>
+   <dt>Instance folder</dt><dd id="detDir" class="path"></dd>
+   <dt>Mods folder</dt><dd id="detModsDir" class="path"></dd>
+  </dl>
+
+  <div class="det-sec">
+   <div class="det-sh">Instance</div>
+   <button id="iAct" class="wide primary"><svg class="ic"><use href="#i-power"/></svg>Activate now</button>
+   <div class="btn-row">
+    <button id="iRen"><svg class="ic"><use href="#i-edit"/></svg>Rename…</button>
+    <button id="iDel" class="danger-ghost"><svg class="ic"><use href="#i-trash"/></svg>Delete…</button>
+   </div>
+  </div>
+
+  <div class="det-sec">
+   <div class="det-sh">Launch</div>
+   <div id="launchInfo" class="launch-info"></div>
+  </div>
+
+  <div class="det-sec">
+   <div class="det-sh">Maintenance</div>
+   <button id="btnClear" class="wide"><svg class="ic"><use href="#i-trash"/></svg>Clear cache</button>
+  </div>
  </aside>
- <footer id="status"><div id="steamStatus"></div><div id="queue"></div><div class="prog"><div id="bar"></div></div><div id="logline"></div></footer>
+
+ <!-- Bottom status bar -->
+ <footer id="status">
+  <div id="steamStatus" class="st-steam"></div>
+  <div class="st-main">
+   <div class="st-line"><span id="queueCount" class="muted"></span><div id="queue" class="queue"></div></div>
+   <div class="prog"><div id="bar"></div></div>
+  </div>
+  <div class="st-end">
+   <div id="logline" class="muted"></div>
+   <button id="btnCancel" class="danger-ghost" hidden><svg class="ic"><use href="#i-stop"/></svg>Cancel downloads</button>
+  </div>
+ </footer>
 </div>
-<div id="modal" hidden><div class="box"><h3 id="mTitle"></h3><div id="mBody"></div><div id="mBtns"></div></div></div>
+
+<!-- Dialog -->
+<div id="modal" hidden role="dialog" aria-modal="true">
+ <div class="dialog">
+  <header class="dlg-h"><h3 id="mTitle"></h3><button id="mX" class="icon-btn" title="Close"><svg class="ic"><use href="#i-x"/></svg></button></header>
+  <div id="mBody" class="dlg-b"></div>
+  <footer id="mBtns" class="dlg-f"></footer>
+ </div>
+</div>
+
+<!-- Context menu -->
+<div id="ctx" class="ctx" role="menu" hidden></div>
+
 <div id="toast" hidden></div>
-<script src="selection.js"></script><script src="renderer.js"></script></body></html>
+<script src="renderer.js"></script></body></html>

@@ -123,4 +123,17 @@ async function deleteMods(items, mode, d) {
   return results;
 }
 
-module.exports = { moveMods, deleteMods, withLocal, withoutLocal };
+/* ---------- mod poster (poster.png) ---------- */
+// Build 42 keeps it in <Mod>/42/, Build 41 (and most older mods) keep it in the mod root; 'common' is checked too.
+const POSTER_DIRS = ['42', '', 'common', '41'];
+const POSTER_MAX = 2 * 1024 * 1024;
+/** roots: mod folders in priority order; returns the path of the first usable poster.png, or null */
+async function findPoster(roots) {
+  for (const r of roots) for (const sub of POSTER_DIRS) {
+    const f = path.join(r, sub, 'poster.png');
+    try { const st = await fsp.stat(f); if (st.isFile() && st.size <= POSTER_MAX) return f; } catch {}
+  }
+  return null;
+}
+
+module.exports = { moveMods, deleteMods, withLocal, withoutLocal, findPoster };
