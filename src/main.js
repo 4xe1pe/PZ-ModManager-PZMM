@@ -1,9 +1,10 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path'), fs = require('fs'), fsp = fs.promises, cp = require('child_process');
 const https = require('https'), crypto = require('crypto');
-const instLib = require('./instances'), launcher = require('./launcher'), modOps = require('./mods');
+const instLib = require('./instances'), launcher = require('./launcher'), modOps = require('./mods'), wk = require('./workshop');
 const APPID = '108600';
-let win, S, mods = [], queue = [], running = false, installed = {}, proc = null, logs = [], launching = false;
+let win, S, mods = [], queue = [], running = false, installed = {}, proc = null, logs = [], launching = false, batches = [];
+const isActive = (s) => ['Waiting', 'Downloading', 'Processing'].includes(s);
 
 const err = (m) => Object.assign(new Error(m), { human: true });
 const wrap = (fn) => async (_event, ...a) => { try { return (await fn(...a)) || {}; } catch (e) { return { error: e.human ? e.message : 'Unexpected error: ' + e.message }; } };
@@ -75,7 +76,8 @@ function pub() {
     settings: S, busy: running, queue, logs: logs.slice(-40), steam: findSteamcmd(), launching,
     instance: { id: ci.id, name: ci.name, dir: ci.dir, modsDir: ci.modsDir, linked: instLib.isLinkedTo(p.modsDir, ci.modsDir), linkKind: li.kind },
     exe, exeExists: !!exe && fs.existsSync(exe),
-    mods: mods.map((m) => ({ ...m, installed: !!installed[m.id], update: hasUpdate(m) }))
+    mods: mods.map((m) => ({ ...m, installed: !!installed[m.id], update: hasUpdate(m) })),
+    batches: batches.slice(-4).map(batchView)
   };
 }
 const send = () => win && win.webContents.send('state', pub());
@@ -92,14 +94,7 @@ function findSteamcmd() {
   }
   return '';
 }
-async function hashDir(d) {
-  const h = crypto.createHash('sha1');
-  const walk = async (p, rel) => {
-    const es = (await fsp.readdir(p, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : 1));
-    for (const e of es) { const r = rel + '/' + e.name; h.update(r); if (e.isDirectory()) await walk(path.join(p, e.name), r); else h.update(await fsp.readFile(path.join(p, e.name))); }
-  };
-  await walk(d, ''); return h.digest('hex');
-}
+const hashDir = modOps.hashDir;
 async function dirSize(d) { let t = 0; try { for (const e of await fsp.readdir(d, { withFileTypes: true })) { const p = path.join(d, e.name); t += e.isDirectory() ? await dirSize(p) : (await fsp.stat(p)).size; } } catch {} return t; }
 const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
 const inside = (child, parent) => { const r = path.relative(parent, child); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); };
@@ -122,7 +117,7 @@ async function findMods(root) {
   for (const [r, d] of roots) {
     let title = path.basename(r);
     try { const m = (await fsp.readFile(path.join(d, 'mod.info'), 'utf8')).match(/^\s*name\s*=\s*(.+?)\s*$/im); if (m) title = m[1]; } catch {}
-    out.push({ dir: r, name: path.basename(r), title });
+    out.push({ dir: r, name: path.basename(r), title, info: d });
   }
   return out;
 }
@@ -187,11 +182,17 @@ async function runJob(j) {
   const base = path.join(libDir(j.pid, j.iid), j.wid);
   await fsp.rm(base, { recursive: true, force: true });
   for (const f of found) {
+    const info = await modOps.readModInfo(f.info);
     await fsp.cp(f.dir, safeChild(base, f.name), { recursive: true });
-    idx.push({ id: j.wid + '/' + f.name, wid: j.wid, name: f.name, title: f.title, workshopTitle: title, status: 'Downloaded', downloadedAt: Date.now(), remoteUpdated: upd, selected: true });
+    idx.push({ id: j.wid + '/' + f.name, wid: j.wid, name: f.name, title: f.title, workshopTitle: title, status: 'Downloaded', downloadedAt: Date.now(), remoteUpdated: upd, selected: true, modId: info.id, requires: info.requires });
   }
   await writeIdx(j.pid, j.iid, idx); if (isCur(j)) mods = idx;
-  j.msg = found.length > 1 ? `${found.length} mods found - untick the ones you don't want before pushing.` : 'OK';
+  // a requirement may still be downloading in this instance: only warn when nothing else for it is pending (collections re-check at the end)
+  const pending = queue.some((q) => q !== j && q.pid === j.pid && q.iid === j.iid && isActive(q.status));
+  const titles = new Set(found.map((f) => f.title));
+  const missing = pending ? [] : modOps.missingRequirements(idx).filter((x) => titles.has(x.mod));
+  j.msg = (found.length > 1 ? `${found.length} mods found - untick the ones you don't want before pushing.` : 'OK') +
+    (missing.length ? ` Warning: requires ${missing.map((x) => '“' + x.needs + '”').join(', ')}, which is not in this instance.` : '');
 }
 async function processQueue() {
   if (running) return; running = true; send();
@@ -205,7 +206,9 @@ async function processQueue() {
       await writeIdx(j.pid, j.iid, idx); if (isCur(j)) mods = idx;
     }
     await refreshInstalled(); send();
+    await settleBatches();
   }
+  await settleBatches();
   running = false; send();
 }
 async function refreshInstalled() {
@@ -303,23 +306,7 @@ ipcMain.handle('push', wrap(async () => {
   try { touchInstance(ci); await fsp.access(dir, fs.constants.W_OK); } catch { throw err('The instance Mods folder is invalid or not writable: ' + dir); }
   const todo = mods.filter((m) => m.selected && m.status === 'Downloaded');
   if (!todo.length) throw err('Nothing to push. Download a mod first and make sure it is ticked.');
-  const results = []; let all = null;
-  for (const m of todo) {
-    try {
-      const src = path.join(ci.libDir, m.wid, m.name);
-      if (!fs.existsSync(src)) throw new Error('library copy is missing - re-download this mod');
-      let dest = safeChild(dir, m.name);
-      if (fs.existsSync(dest)) {
-        if ((await hashDir(src)) === (await hashDir(dest))) { results.push({ name: m.name, r: 'Already installed' }); continue; }
-        let c = all; if (!c) { c = await ask('conflict', { name: m.name }); if (c.all) all = c; }
-        if (c.action === 'skip') { results.push({ name: m.name, r: 'Skipped' }); continue; }
-        if (c.action === 'replace') await fsp.rm(dest, { recursive: true, force: true });
-        else { let i = 1, n = `${m.name}_${m.wid}`; while (fs.existsSync(path.join(dir, n))) n = `${m.name}_${m.wid}_${++i}`; dest = safeChild(dir, n); }
-      }
-      await fsp.cp(src, dest, { recursive: true });
-      results.push({ name: m.name, r: 'Installed' });
-    } catch (e) { results.push({ name: m.name, r: 'Failed', msg: e.message + (e.code === 'EPERM' || e.code === 'EBUSY' ? ' (close Project Zomboid and retry)' : '') }); }
-  }
+  const results = await modOps.pushMods(todo, ci, { ask: (name) => ask('conflict', { name }), safeChild });
   await refreshInstalled();
   const note = instLib.isLinkedTo(p.modsDir, dir) ? `The game is already pointed at "${ci.name}", so it sees these mods now.` : `Pushed into the instance "${ci.name}". The game will use them once this instance is activated - click "Launch Project Zomboid" or "Activate now".`;
   return { results, note, instance: ci.name };
@@ -437,6 +424,7 @@ ipcMain.handle('instDelete', wrap(async (id) => {
     const prot = [app.getPath('home'), S.library, ...Object.values(S.profiles).flatMap((p) => [p.gameDir, p.modsDir]), ...Object.values(S.instances).flat().filter((o) => o.id !== i.id).flatMap((o) => [o.dir, o.libDir, o.modsDir])].filter(Boolean);
     for (const t of [i.modsDir, i.libDir]) for (const q of prot) if (instLib.inside(q, t)) throw err(`Refusing to delete "${t}" because it contains "${q}".`);
     for (const t of [i.modsDir, i.libDir]) await fsp.rm(t, { recursive: true, force: true }).catch((e) => { throw err('Could not delete ' + t + ': ' + e.message); });
+    if (i.icon) await fsp.rm(safeChild(i.dir, i.icon), { force: true }).catch(() => {});
     await fsp.rm(path.join(i.dir, '.pzmm-instance.json'), { force: true }); await fsp.rmdir(i.dir).catch(() => {});
   }
   S.instances[pid] = L.filter((x) => x.id !== i.id);
@@ -512,7 +500,7 @@ ipcMain.handle('modsAll', wrap(async () => {
     const list = (await modDeps.readIdx(pid, i.id)).sort((a, b) => String(a.title).localeCompare(String(b.title)));
     for (const m of list) {
       const ok = m.status !== 'Failed';
-      items.push({ iid: i.id, iname: i.name, pid, pname: (S.profiles[pid] || {}).name || pid, id: m.id, wid: m.wid, name: m.name, title: m.title, status: m.status, error: m.error, downloadedAt: m.downloadedAt, update: hasUpdate(m),
+      items.push({ iid: i.id, iname: i.name, pid, pname: (S.profiles[pid] || {}).name || pid, id: m.id, wid: m.wid, name: m.name, title: m.title, status: m.status, error: m.error, downloadedAt: m.downloadedAt, update: hasUpdate(m), selected: !!m.selected,
         hasLib: ok && fs.existsSync(path.join(i.libDir, m.wid, m.name)), inMods: ok && fs.existsSync(path.join(i.modsDir, m.name)) });
     }
   }
@@ -528,6 +516,125 @@ ipcMain.handle('modsDelete', wrap(async (items, mode) => {
   const list = (items || []).map((x) => ({ inst: locate(x.iid), id: x.id }));
   if (!list.length) throw err('Select the mods you want to delete first.');
   return withModsLock(list.map((x) => x.inst), async () => ({ results: await modOps.deleteMods(list, mode, modDeps) }));
+}));
+
+/* ---------- Steam Workshop collections ---------- */
+// A collection creates its own instance (named after the collection, icon = its image) and downloads
+// its mods into that instance through the normal queue. When everything has finished, the downloaded
+// mods are copied into the new instance's Mods folder (the same as Push). The instance is never
+// selected or activated, and the active instance is never touched.
+const bid = () => 'b' + crypto.randomBytes(4).toString('hex');
+const planApi = { details: (ids) => details(ids), collectionChildren: wk.collectionChildren, requiredItems: wk.requiredItems };
+const planFor = (wid) => wk.planCollection(wid, planApi);
+const batchJobs = (b) => queue.filter((q) => q.batch === b.id);
+
+function batchView(b) {
+  const jobs = batchJobs(b);
+  return { id: b.id, wid: b.wid, title: b.title, iname: b.iname, status: b.status, total: jobs.length,
+    finished: jobs.filter((q) => q.status === 'Completed' || q.status === 'Failed').length, failed: jobs.filter((q) => q.status === 'Failed').length, report: b.report || null };
+}
+
+async function saveIcon(inst, url) { // non-fatal: the instance falls back to its initials
+  try {
+    const { data, type } = await wk.fetchImage(url);
+    const name = 'icon.' + wk.imageExt(type);
+    await fsp.writeFile(safeChild(inst.dir, name), data);
+    return name;
+  } catch (e) { log('Could not download the collection image, the instance keeps its initials: ' + e.message); return ''; }
+}
+
+const startingCollections = new Set(); // a second click while Steam is still being asked must not create a second instance
+async function startCollection(wid, mode) {
+  if (!findSteamcmd()) throw err('SteamCMD was not found. Open Settings to select it or let the app install it.');
+  if (startingCollections.has(wid) || batches.some((b) => b.wid === wid && b.status !== 'Done')) throw err('This collection is already being downloaded.');
+  startingCollections.add(wid);
+  try { return await createCollection(wid, mode); } finally { startingCollections.delete(wid); }
+}
+async function createCollection(wid, mode) {
+  const plan = await planFor(wid);
+  const list = wk.downloadList(plan, mode);
+  if (!list.length) throw err('None of the mods in this collection can be downloaded' + (plan.members.length ? ' (see the problems listed).' : '.'));
+
+  const pid = S.active;
+  const name = wk.uniqueName(wk.instanceNameFor(plan.title, wid), new Set(S.instances[pid].map((i) => i.name.toLowerCase())));
+  let root = path.join(S.library, 'Instances', pid, instLib.slugify(name)), n = 1;
+  while (fs.existsSync(root)) root = path.join(S.library, 'Instances', pid, instLib.slugify(name)) + '-' + (++n);
+  root = rootOk(root);
+  const inst = mkInstance(name, root); touchInstance(inst);
+  S.instances[pid].push(inst); saveSettings(); // created, but NOT selected and NOT activated
+  if (plan.preview) { const icon = await saveIcon(inst, plan.preview); if (icon) { inst.icon = icon; saveSettings(); } }
+
+  const b = { id: bid(), wid, title: plan.title || name, pid, iid: inst.id, iname: name, mode, status: 'Downloading', depsChecked: plan.depsChecked, nested: plan.nested,
+    depsInfo: plan.deps.map((d) => ({ title: d.title, wid: d.wid, reason: d.reason, ok: d.ok, requiredBy: d.requiredBy })) };
+  const failedRows = [];
+  for (const m of list) queue.push({ wid: m.wid, pid, iid: inst.id, iname: name, title: m.title, status: 'Waiting', batch: b.id, origin: m.origin, requiredBy: m.requiredBy });
+  for (const m of plan.members.filter((x) => !x.ok)) { // unavailable items are shown as failed right away, nothing is downloaded for them
+    queue.push({ wid: m.wid, pid, iid: inst.id, iname: name, title: m.title, status: 'Failed', msg: m.reason, unavailable: true, batch: b.id, origin: 'collection' });
+    failedRows.push({ id: m.wid + '/_failed', wid: m.wid, name: '', title: m.title, status: 'Failed', downloadedAt: Date.now(), error: m.reason, selected: false });
+  }
+  if (failedRows.length) await writeIdx(pid, inst.id, failedRows);
+  batches.push(b); if (batches.length > 10) batches = batches.filter((x) => x.status !== 'Done').concat(batches.filter((x) => x.status === 'Done').slice(-3));
+  send(); processQueue();
+  const autoDeps = mode === 'auto' ? list.filter((m) => m.origin === 'dependency').length : 0;
+  return { info: `Collection “${name}”: ${list.length} mod(s) queued into a new instance (not active).${autoDeps ? ` Includes ${autoDeps} required mod(s).` : ''}` };
+}
+
+/** called from processQueue: when a collection has no jobs left, push its mods into its instance and write the report */
+async function settleBatches() {
+  for (const b of batches) {
+    if (b.status !== 'Downloading') continue;
+    if (batchJobs(b).some((q) => q.status === 'Waiting' || isActive(q.status))) continue;
+    b.status = 'Installing'; send();
+    try { await finishBatch(b); } catch (e) { b.report = { ...(b.report || {}), error: e.message }; }
+    b.status = 'Done'; send();
+  }
+}
+
+async function finishBatch(b) {
+  const jobs = batchJobs(b), inst = (S.instances[b.pid] || []).find((i) => i.id === b.iid);
+  const rows = jobs.map((q) => q.status === 'Completed'
+    ? { name: q.title || q.wid, r: 'Downloaded', msg: q.origin === 'dependency' ? 'required mod' + (q.requiredBy && q.requiredBy.length ? ' of ' + q.requiredBy.join(', ') : '') : (q.msg && q.msg !== 'OK' ? q.msg : '') }
+    : { name: q.title || q.wid, r: q.unavailable ? 'Unavailable' : 'Failed', msg: q.msg || '' });
+  const notDownloaded = b.depsInfo.filter((d) => !d.ok || b.mode === 'manual').map((d) => ({
+    name: d.title, r: d.ok ? 'Not downloaded' : 'Unavailable', msg: (d.ok ? 'required by ' + d.requiredBy.join(', ') + ' - add it yourself if you need it' : d.reason) }));
+  if (!inst) { b.report = { rows, notDownloaded, pushed: [], missing: [], note: 'The instance was removed before the download finished.' }; return; }
+
+  const idx = await readIdx(b.pid, b.iid);
+  const wids = new Set(jobs.map((q) => q.wid));
+  const toPush = idx.filter((m) => m.status === 'Downloaded' && wids.has(m.wid) && m.selected !== false);
+  const pushed = toPush.length ? await modOps.pushMods(toPush, inst, { ask: async () => ({ action: 'skip' }), safeChild }) : [];
+  const missing = modOps.missingRequirements(idx);
+  b.report = { rows, pushed, notDownloaded, missing, depsChecked: b.depsChecked, nested: b.nested, instance: inst.name };
+  if (b.pid === S.active && getInst().id === b.iid) { mods = idx; await refreshInstalled(); }
+}
+
+ipcMain.handle('inspect', wrap(async (input) => { // what kind of Workshop item is this? (never throws for network trouble)
+  const wid = parseId(input);
+  if (!wid) throw err('That is not a valid Workshop URL or ID. Paste a link like https://steamcommunity.com/sharedfiles/filedetails/?id=1234567890 or just the number.');
+  try {
+    const [d] = await details([wid]);
+    if (!d || Number(d.result) !== 1) return { wid, kind: 'unknown' };
+    if (Number(d.file_type) !== 2) return { wid, kind: 'mod', title: d.title };
+    const kids = await wk.collectionChildren([wid]);
+    return { wid, kind: 'collection', title: d.title, count: (kids.get(wid) || []).length };
+  } catch { return { wid, kind: 'unknown' }; }
+}));
+ipcMain.handle('collectionPlan', wrap(async (input) => {
+  const wid = parseId(input);
+  if (!wid) throw err('That is not a valid Workshop URL or ID.');
+  return { plan: await planFor(wid), profile: S.profiles[S.active].name };
+}));
+ipcMain.handle('downloadCollection', wrap(async (input, mode) => {
+  const wid = parseId(input);
+  if (!wid) throw err('That is not a valid Workshop URL or ID.');
+  if (!['auto', 'manual'].includes(mode)) throw err('Choose how the required mods should be handled.');
+  return startCollection(wid, mode);
+}));
+ipcMain.handle('instIcon', wrap(async (iid) => {
+  const i = locate(iid); if (!i.icon) return { data: null };
+  let buf; try { buf = await fsp.readFile(safeChild(i.dir, i.icon)); } catch { return { data: null }; }
+  const mime = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[path.extname(i.icon).slice(1).toLowerCase()] || 'application/octet-stream';
+  return { data: `data:${mime};base64,` + buf.toString('base64') };
 }));
 
 /* ---------- mod poster (icon in the mod lists), sent as a data URL ---------- */

@@ -92,6 +92,32 @@ delete** them; every instance has its own mod list, downloads, update state and 
 
 Both are refused while a download is running for one of the instances, or while the game is running with one of them active.
 
+### Downloads tab
+The **All mods** page has two browser-style tabs next to its title. **Mods** is the list described above. **Downloads**
+lists the downloaded Workshop mods of the instance chosen in the dropdown that are not in its Mods folder yet. Downloading
+never installs anything by itself: tick the mods to include, then press **Push to Project Zomboid** (top bar), which
+pushes the selected instance.
+
+### Steam Workshop collections
+Open a collection page in the Workshop browser and the toolbar button becomes **Download collection**. The app reads the
+collection, shows any problems (private, removed, or non-Project Zomboid items) and asks how to handle required mods:
+
+* **Manage automatically** downloads the collection's mods and the available required mods.
+* **Manage manually** downloads only the collection's mods; required mods are listed at the end so you can add them yourself.
+
+Either way a new instance is created with the collection's name and image as its icon, the mods are downloaded through the
+normal queue (one SteamCMD job per mod, with progress and errors in the status bar), and the downloaded mods are pushed into
+the new instance's Mods folder. The new instance is **never activated or selected** automatically: the instance you were
+using, and its mods, are left untouched. A report lists what was downloaded, what failed, and any requirement that is still
+missing. Nested collections are expanded (up to three levels), and a collection that is already being downloaded cannot be
+started a second time.
+
+The required-mod lookup uses Steam's Web API. If Steam does not answer, the plan says the check could not run and the
+missing requirements are still reported after the download, based on the `require=` lines in each mod's `mod.info`.
+
+### Startup
+PZMM always opens on the Workshop browser.
+
 ### How switching works (and why)
 Project Zomboid reads local mods from `%UserProfile%\Zomboid\mods` and has no setting for another mods folder
 (the `-cachedir` launch option would also move saves/options, which is not wanted). So the manager turns

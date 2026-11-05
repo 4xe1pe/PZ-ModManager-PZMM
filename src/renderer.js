@@ -28,10 +28,25 @@ function hydratePosters(root) {
   });
 }
 
-let st = null, curId = null, curTitle = '', forced = '', view = 'mods', instSig = '';
+let st = null, curId = null, curTitle = '', forced = '', view = 'browser', instSig = '';
+let curKind = null, curCount = 0, amTab = 'mods', dlRows = [];
 let modQ = '', modF = 'all', amQ = '', amF = 'all';
 const wv = $('wv');
 let am = [], amRows = [], amSel = new Set(), amOpen = false, amBusy = false, amSig = '', amFilter = '', amTarget = '';
+
+/* ---------- instance icons: the collection image, or initials ---------- */
+const instIconCache = new Map();
+const loadInstIcon = (iid, icon) => { const k = iid + '\n' + icon; if (!instIconCache.has(k)) instIconCache.set(k, Promise.resolve().then(() => api.instIcon(iid)).then((r) => (r && r.data) || null, () => null)); return instIconCache.get(k); };
+function hydrateInstIcons(root) {
+  root.querySelectorAll('[data-iicon]').forEach((el) => {
+    if (el.querySelector('img')) return;
+    loadInstIcon(el.dataset.iid, el.dataset.iicon).then((src) => {
+      if (!src || !el.isConnected || el.querySelector('img')) return;
+      const img = new Image(); img.alt = ''; img.draggable = false;
+      img.onerror = () => img.remove(); img.src = src; el.appendChild(img);
+    });
+  });
+}
 
 /* ---------- feedback: toast, dialogs, context menu ---------- */
 function toast(r, okMsg) {
@@ -112,7 +127,10 @@ function renderStatus() {
     ? `<span class="dot ok"></span>SteamCMD ready`
     : `<span class="dot bad"></span>SteamCMD not found – open Settings`;
   const active = st.queue.filter((q) => ACTIVE.includes(q.status)).length, failed = st.queue.filter((q) => q.status === 'Failed').length;
-  $('queueCount').textContent = st.queue.length ? `Queue: ${active} active${failed ? ` · ${failed} failed` : ''}` : 'Queue empty';
+  const bt = (st.batches || []).filter((b) => b.status !== 'Done').slice(-1)[0];
+  const batchTxt = bt ? `Collection “${bt.title}”: ${bt.finished}/${bt.total} done${bt.failed ? ` · ${bt.failed} failed` : ''}${bt.status === 'Installing' ? ' · installing into the instance…' : ''}` : '';
+  const queueTxt = st.queue.length ? `Queue: ${active} active${failed ? ` · ${failed} failed` : ''}` : 'Queue empty';
+  $('queueCount').textContent = [batchTxt, queueTxt].filter(Boolean).join(' · ');
   $('queue').innerHTML = st.queue.slice(-6).map((q) => `<div class="qrow">${esc(q.title)} <span class="muted">(${esc(q.wid)}) → ${esc(q.iname || '')}</span> – <b class="${q.status === 'Failed' ? 'bad' : q.status === 'Completed' ? 'ok' : ''}">${q.status}</b> <span class="muted">${esc(q.status === 'Failed' || q.status === 'Completed' ? q.msg || '' : q.line || '')}</span></div>`).join('');
   $('bar').className = busy ? 'run' : '';
   $('btnCancel').hidden = !busy;
@@ -122,21 +140,28 @@ function renderStatus() {
 let instListSig = '';
 function renderInstances() {
   const S = st.settings, L = S.instances[S.active], cur = curInst(), I = st.instance;
-  const sig = JSON.stringify([S.active, L.map((i) => [i.id, i.name, i.modsDir]), cur.id, I.linked]);
+  const sig = JSON.stringify([S.active, L.map((i) => [i.id, i.name, i.modsDir, i.icon || '']), cur.id, I.linked]);
   if (sig !== instListSig) { // rebuild only on change, so hover and context menus are not reset by log updates
     instListSig = sig;
     $('instList').innerHTML = L.length ? L.map((i) => {
       const on = i.id === cur.id;
       const state = on ? (I.linked ? 'Active in the game' : 'Selected · not active yet') : 'Idle';
       return `<div class="inst ${on ? 'on' : ''}" role="option" aria-selected="${on}" tabindex="0" data-id="${esc(i.id)}" title="${esc(i.modsDir)}">
-        <div class="tile" style="--h:${hue(i.name)}">${esc(initials(i.name))}</div>
+        <div class="tile mod-ic" style="--h:${hue(i.name)}"${i.icon ? ` data-iid="${esc(i.id)}" data-iicon="${esc(i.icon)}"` : ''}>${esc(initials(i.name))}</div>
         <div class="inst-txt"><b>${esc(i.name)}</b><small>${on && I.linked ? '<span class="dot ok"></span>' : '<span class="dot"></span>'}${state}</small></div></div>`;
     }).join('') : '<div class="empty-s">No instances yet.</div>';
+    hydrateInstIcons($('instList'));
   }
 }
 function renderDetails() {
   const S = st.settings, P = S.profiles[S.active], cur = curInst(), I = st.instance;
-  $('detTile').textContent = initials(cur.name); $('detTile').style.setProperty('--h', hue(cur.name));
+  const dt = $('detTile'), key = [cur.id, cur.name, cur.icon || ''].join('|');
+  if (dt.dataset.key !== key) { // only rebuild when the instance changes, so a loaded image is not re-fetched on every update
+    dt.dataset.key = key; dt.textContent = initials(cur.name); dt.classList.add('mod-ic');
+    if (cur.icon) { dt.dataset.iid = cur.id; dt.dataset.iicon = cur.icon; } else { delete dt.dataset.iid; delete dt.dataset.iicon; }
+    hydrateInstIcons(dt.parentElement);
+  }
+  dt.style.setProperty('--h', hue(cur.name));
   $('detName').textContent = cur.name;
   $('detSub').textContent = `Project Zomboid · ${P.name}`;
   $('detVer').textContent = P.name;
@@ -182,14 +207,28 @@ function renderMods() {
 }
 function renderDetect() {
   const id = curId; if (!id) { $('detect').textContent = 'Browse the Workshop – open a mod page and its ID is picked up automatically.'; return; }
+  if (curKind === 'collection') { $('detect').innerHTML = `<b>${esc(curTitle)}</b><span class="muted">Steam Workshop collection · ID ${esc(id)}${curCount ? ` · ${curCount} item(s)` : ''}</span><span class="badge b-wait">Collection</span>`; return; }
   const m = st.mods.find((x) => x.wid === id), q = st.queue.find((x) => x.wid === id && x.iid === curInst().id && ACTIVE.includes(x.status));
   const state = q ? q.status : !m ? 'Not downloaded' : m.status === 'Failed' ? 'Failed' : m.installed ? 'Installed' : 'Downloaded';
   const cls = state === 'Not downloaded' ? 'b-wait' : state === 'Installed' ? 'b-Installed' : state === 'Failed' ? 'b-Failed' : 'b-Downloaded';
   $('detect').innerHTML = `<b>${esc(curTitle)}</b><span class="muted">ID ${esc(id)}</span><span class="badge ${cls}">${state}</span>${m && m.update ? '<span class="badge b-upd">Update available</span>' : ''}`;
 }
+const kindCache = new Map();
+function kindOf(v) { // what is this Workshop item? cached; unknown results are not cached (they may be a network hiccup)
+  if (!kindCache.has(v)) kindCache.set(v, api.inspect(v).then((r) => { if (!r || r.error || r.kind === 'unknown') kindCache.delete(v); return r; }));
+  return kindCache.get(v);
+}
+function syncDownloadBtn() {
+  const coll = curKind === 'collection' && !$('paste').value.trim();
+  $('btnDownload').innerHTML = `${icon('download')}${coll ? 'Download collection' : 'Download'}`;
+  $('btnDownload').title = coll ? 'Create a new instance from this Workshop collection and download all its mods' : 'Download the Workshop mod on the current page or pasted link';
+}
 function nav() {
   const u = wv.getURL(); const m = u.match(/sharedfiles\/filedetails\/?\?(?:.*&)?id=(\d+)/);
-  curId = m ? m[1] : null; curTitle = wv.getTitle().replace(/^Steam Workshop::/, '') || ''; renderDetect();
+  const id = m ? m[1] : null;
+  if (id !== curId) { curKind = null; curCount = 0; }
+  curId = id; curTitle = wv.getTitle().replace(/^Steam Workshop::/, '') || ''; renderDetect(); syncDownloadBtn();
+  if (id) kindOf(id).then((k) => { if (curId === id && k && k.kind && k.kind !== 'unknown') { curKind = k.kind; curCount = k.count || 0; renderDetect(); syncDownloadBtn(); } });
 }
 
 /* ---------- navigation between sections ---------- */
@@ -236,10 +275,11 @@ async function loadAllMods() {
 }
 function amSync() {
   if (!amOpen || !st) return;
-  const sig = JSON.stringify([st.busy, st.settings.instances, st.mods.map((m) => [m.id, m.status, m.installed]), st.queue.map((q) => q.status)]);
+  const sig = JSON.stringify([st.busy, st.settings.instances, st.mods.map((m) => [m.id, m.status, m.installed, m.selected]), st.queue.map((q) => q.status), (st.batches || []).map((b) => b.status)]);
   if (sig !== amSig) { amSig = sig; loadAllMods(); }
 }
 function amBar() {
+  if (amTab === 'downloads') return; // the Downloads tab writes its own counter
   const n = amSelected().length;
   $('amCount').textContent = n ? `${n} selected` : `${amRows.length} shown`;
   $('amMove').disabled = $('amDel').disabled = !n || amBusy;
@@ -258,6 +298,8 @@ function renderAllMods() {
   $('amFilter').innerHTML = groups(amFilter);
   $('amTarget').innerHTML = groups(amTarget);
   const q = amQ.trim().toLowerCase();
+  syncAmTabs();
+  if (amTab === 'downloads') return renderDownloads(q);
   amRows = am.filter((m) => m.iid === amFilter && matchQ(m, q) && matchF(amState(m), m.update, amF));
   $('amTable').innerHTML = !am.some((m) => m.iid === amFilter) ? '<div class="empty"><div class="empty-ic">' + icon('list') + '</div><b>No mods in this instance</b><p>Pick another instance above, or download or copy mods into this one.</p></div>'
     : !amRows.length ? '<div class="empty"><b>No mods match</b><p>Try another search or filter.</p></div>'
@@ -272,6 +314,30 @@ function renderAllMods() {
         <td>${m.update ? '<span class="badge b-upd">Update available</span>' : '<span class="muted">—</span>'}</td></tr>`;
     }).join('')}</tbody></table>`;
   amBar(); hydratePosters($('amTable'));
+}
+function syncAmTabs() {
+  const waiting = am.filter((m) => m.iid === amFilter && amState(m) === 'Downloaded').length;
+  document.querySelectorAll('#allModsView .tab').forEach((t) => { const on = t.dataset.t === amTab; t.classList.toggle('on', on); t.setAttribute('aria-selected', String(on)); });
+  $('dlCount').textContent = waiting || '';
+  $('amActs').hidden = amTab !== 'mods';
+  $('amStatus').hidden = amTab !== 'mods';
+}
+/* Downloads tab: downloaded mods of the chosen instance that are not in its Mods folder yet.
+   Nothing is pushed from here: the top-bar "Push to Project Zomboid" button does that (it only ever uses the selected instance). */
+function renderDownloads(q) {
+  const sameAsCur = curInst().id === amFilter;
+  dlRows = am.filter((m) => m.iid === amFilter && amState(m) === 'Downloaded' && matchQ(m, q));
+  $('amCount').textContent = `${dlRows.length} waiting`;
+  const hasAny = am.some((m) => m.iid === amFilter);
+  $('amTable').innerHTML = !hasAny ? '<div class="empty"><div class="empty-ic">' + icon('list') + '</div><b>No mods in this instance</b><p>Pick another instance above, or download mods into this one.</p></div>'
+    : !dlRows.length ? '<div class="empty"><div class="empty-ic">' + icon('download') + '</div><b>Nothing is waiting to be pushed</b><p>Mods you download show up here until they are pushed into Project Zomboid.</p></div>'
+    : `<div class="dl-hint muted">Downloaded mods wait here until you push them. Downloading never installs them by itself: tick the mods to include, then press <b>Push to Project Zomboid</b> in the top bar.${sameAsCur ? '' : ' Select this instance to change which mods are ticked.'}</div>
+      <table><thead><tr><th class="c-chk" title="Ticked mods are pushed">Push</th><th>Mod</th><th class="hide-md">Downloaded</th><th>Status</th></tr></thead><tbody>${dlRows.map((m) => `<tr class="${m.selected ? 'sel-row' : ''}" data-dl="${esc(m.id)}">
+        <td class="c-chk"><input type="checkbox" class="dlSel" data-id="${esc(m.id)}" ${m.selected ? 'checked' : ''} ${sameAsCur ? '' : 'disabled'}></td>
+        <td><div class="modcell">${modIcon(m, m.iid)}<div class="mc-txt"><div class="mc-title">${esc(m.title)}</div><small>${m.name && m.name !== m.title ? esc(m.name) + ' · ' : ''}Workshop ${esc(m.wid)}</small></div></div></td>
+        <td class="hide-md muted">${m.downloadedAt ? new Date(m.downloadedAt).toLocaleString() : '—'}</td>
+        <td><span class="badge ${m.selected ? 'b-Downloaded' : 'b-wait'}">${m.selected ? 'Ready to push' : 'Not ticked'}</span></td></tr>`).join('')}</tbody></table>`;
+  hydratePosters($('amTable'));
 }
 async function amMoveFlow() {
   const S = st.settings, to = allInst().find((i) => i.id === amTarget), sel = amSelected(), mv = sel.filter((m) => m.iid !== to.id && m.status !== 'Failed');
@@ -299,8 +365,8 @@ async function amDelFlow() {
 }
 
 /* ---------- results / settings / conflicts ---------- */
-const resultIcon = { Installed: '✔', Moved: '✔', Replaced: '✔', 'Kept both': '✔', Removed: '✔', 'Already installed': '＝', Skipped: '↷', Partial: '⚠', Failed: '✖' };
-const resultRows = (results) => results.map((x) => `<div class="res-row"><span>${resultIcon[x.r]} ${esc(x.name)}${x.from ? ` <small>(${esc(x.from)})</small>` : ''}</span><span class="${x.r === 'Failed' || x.r === 'Partial' ? 'bad' : ['Installed', 'Moved', 'Replaced', 'Kept both', 'Removed'].includes(x.r) ? 'ok' : ''}">${x.r}${x.msg ? ' – ' + esc(x.msg) : ''}</span></div>`).join('');
+const resultIcon = { Installed: '✔', Moved: '✔', Replaced: '✔', 'Kept both': '✔', Removed: '✔', Downloaded: '✔', 'Already installed': '＝', Skipped: '↷', 'Not downloaded': '↷', Unavailable: '✖', Partial: '⚠', Failed: '✖' };
+const resultRows = (results) => results.map((x) => `<div class="res-row"><span>${resultIcon[x.r] || ''} ${esc(x.name)}${x.from ? ` <small>(${esc(x.from)})</small>` : ''}</span><span class="${['Failed', 'Partial', 'Unavailable'].includes(x.r) ? 'bad' : ['Installed', 'Moved', 'Replaced', 'Kept both', 'Removed', 'Downloaded'].includes(x.r) ? 'ok' : ''}">${x.r}${x.msg ? ' – ' + esc(x.msg) : ''}</span></div>`).join('');
 
 /* ---------- event wiring (set up once) ---------- */
 document.querySelectorAll('.nav-item').forEach((t) => (t.onclick = () => showView(t.dataset.s)));
@@ -309,8 +375,50 @@ $('fwd').onclick = () => wv.canGoForward() && wv.goForward();
 $('home').onclick = () => wv.loadURL('https://steamcommunity.com/app/108600/workshop/');
 ['did-navigate', 'did-navigate-in-page', 'page-title-updated', 'dom-ready'].forEach((e) => wv.addEventListener(e, () => { try { nav(); } catch {} }));
 
-const doDownload = async () => { const v = $('paste').value.trim() || curId; if (!v) return toast({ error: 'Open a Workshop mod page or paste a URL/ID first.' }); const r = await act(api.download(v)); if (!r.error) $('paste').value = ''; };
+const doDownload = async () => {
+  const v = $('paste').value.trim() || curId;
+  if (!v) return toast({ error: 'Open a Workshop mod page or paste a URL/ID first.' });
+  const k = await kindOf(v);
+  if (k && k.error) return toast(k);
+  if (k && k.kind === 'collection') return collectionFlow(k.wid);
+  const r = await act(api.download(v)); if (!r.error) $('paste').value = '';
+};
 $('btnDownload').onclick = doDownload; $('addPaste').onclick = doDownload; $('paste').onkeydown = (e) => e.key === 'Enter' && doDownload();
+$('paste').oninput = syncDownloadBtn;
+
+/* ---------- Steam Workshop collections ---------- */
+async function collectionFlow(wid) {
+  const r = await api.collectionPlan(wid); if (r.error) return toast(r);
+  const p = r.plan, ok = p.members.filter((m) => m.ok), bad = p.members.filter((m) => !m.ok);
+  if (!ok.length) return toast({ error: 'None of the mods in this collection can be downloaded.' });
+  const more = (arr) => (arr.length > 12 ? `<div class="muted">… and ${arr.length - 12} more</div>` : '');
+  const badBlock = bad.length ? `<div class="opt"><b class="bad">${bad.length} item(s) cannot be downloaded</b> – they are listed as failed in the new instance:</div>${bad.slice(0, 12).map((m) => `<div class="res-row"><span>✖ ${esc(m.title)}</span><span class="bad">${esc(m.reason)}</span></div>`).join('')}${more(bad)}` : '';
+  const depBlock = !p.depsChecked ? '<div class="opt muted">The required-mod check could not run (Steam did not answer). Missing requirements are still reported after the download.</div>'
+    : !p.deps.length ? '<div class="opt muted">No required mods were reported for these items.</div>'
+    : `<div class="opt"><b>${p.deps.length} required mod(s) found</b></div>${p.deps.slice(0, 12).map((d) => `<div class="res-row"><span>${d.ok ? '•' : '✖'} ${esc(d.title)} <small>required by ${esc(d.requiredBy.join(', '))}</small></span><span class="${d.ok ? '' : 'bad'}">${d.ok ? 'available' : esc(d.reason)}</span></div>`).join('')}${more(p.deps)}`;
+  const body = `<div>This creates a new instance <b>“${esc(p.title || wid)}”</b> for <b>${esc(r.profile)}</b> and downloads <b>${ok.length}</b> mod(s) into it. Your current instance is not changed, and nothing is activated.</div>
+    ${badBlock}${depBlock}
+    ${p.nested ? `<div class="opt muted">${p.nested} nested collection(s) were not expanded.</div>` : ''}
+    <div class="opt muted"><b>Manage automatically</b> also downloads the available required mods. <b>Manage manually</b> downloads only this collection; the required mods are listed at the end so you can handle them yourself.</div>`;
+  const c = await modal('Download collection', body, [['Cancel', 'c'], ['Manage manually', 'manual'], ['Manage automatically', 'auto', 'primary']]);
+  if (c.val === 'manual' || c.val === 'auto') { const r2 = await act(api.downloadCollection(wid, c.val)); if (!r2.error) $('paste').value = ''; }
+}
+const notifiedBatches = new Set();
+function whenFree(fn) { if ($('modal').hidden) fn(); else setTimeout(() => whenFree(fn), 400); } // never replace an open dialog
+function showBatchReport(b) {
+  const r = b.report || {};
+  const sec = (title, html) => (html ? `<div class="opt"><b>${title}</b></div>${html}` : '');
+  const missing = (r.missing || []).map((m) => `<div class="res-row"><span>⚠ ${esc(m.mod)}</span><span class="bad">needs ${esc(m.needs)}</span></div>`).join('');
+  const body = `<div>Instance <b>“${esc(b.iname)}”</b> is ready. It is <b>not active</b>: select it in the instance list and press <b>Activate now</b> or <b>Launch</b> when you want to play with it.</div>`
+    + sec('Downloads', resultRows(r.rows || []))
+    + sec('Installed into the instance', resultRows(r.pushed || []))
+    + sec('Not downloaded', resultRows(r.notDownloaded || []))
+    + sec('Missing requirements', missing)
+    + (r.depsChecked === false ? '<div class="opt muted">The required-mod check could not run (Steam did not answer). Only requirements written in the mods\' own files were checked.</div>' : '')
+    + (r.error ? `<div class="opt bad">${esc(r.error)}</div>` : '');
+  modal(`Collection “${b.title}” finished`, body, [['OK', 1, 'primary']]); // the title is set as text, not HTML
+}
+
 $('btnCancel').onclick = () => api.cancel();
 $('btnLaunch').onclick = async () => {
   $('btnLaunch').disabled = true; toast({ info: 'Preparing launch… progress is shown in the status bar.' });
@@ -373,7 +481,13 @@ $('amTable').addEventListener('change', (e) => {
   const t = e.target;
   if (t.classList.contains('amSel')) { const m = amRows.find((x) => amKey(x) === t.dataset.k); if (m) { t.checked ? amSel.add(amKey(m)) : amSel.delete(amKey(m)); t.closest('tr').classList.toggle('sel-row', t.checked); } amBar(); }
   else if (t.id === 'amAll') { amRows.forEach((m) => (t.checked ? amSel.add(amKey(m)) : amSel.delete(amKey(m)))); renderAllMods(); }
+  else if (t.classList.contains('dlSel')) {
+    const m = dlRows.find((x) => x.id === t.dataset.id); if (!m || curInst().id !== m.iid) return;
+    m.selected = t.checked; const sm = st.mods.find((x) => x.id === m.id); if (sm) sm.selected = t.checked;
+    api.select(m.id, t.checked); renderAllMods();
+  }
 });
+document.querySelectorAll('#allModsView .tab').forEach((t) => (t.onclick = () => { amTab = t.dataset.t; renderAllMods(); }));
 $('amTable').addEventListener('contextmenu', (e) => {
   const tr = e.target.closest('tr[data-k]'); if (!tr) return;
   const m = amRows.find((x) => amKey(x) === tr.dataset.k); if (!m) return;
@@ -427,7 +541,12 @@ function bindHandle(id, key, dir) { // dir: +1 when the handle sits on the panel
 bindHandle('rzL', 'side', 1); bindHandle('rzR', 'det', -1);
 fit(); window.addEventListener('resize', fit);
 
-api.on('state', (s) => { st = s; render(); });
+api.on('state', (s) => {
+  st = s; render();
+  for (const b of s.batches || []) if (b.status === 'Done' && !notifiedBatches.has(b.id)) {
+    notifiedBatches.add(b.id); whenFree(() => showBatchReport(b));
+  }
+});
 api.on('log', (l) => { $('logline').textContent = l; });
 api.on('conflict', async (d) => {
   const r = await modal('Mod already exists', `${d.where ? 'The mod' : 'A different version of'} <b>${esc(d.name)}</b> already exists in ${d.where ? 'instance “' + esc(d.where) + '”' : 'the Mods folder'}.<br><br><label><input type="checkbox" id="chkAll"> Apply to all remaining</label>`, [['Replace', 'replace', 'primary'], ['Keep both', 'both'], ['Skip', 'skip']], true);

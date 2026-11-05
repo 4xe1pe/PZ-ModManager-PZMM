@@ -1,5 +1,5 @@
 'use strict';
-const fs = require('fs'), fsp = fs.promises, path = require('path');
+const fs = require('fs'), fsp = fs.promises, path = require('path'), crypto = require('crypto');
 const { hint } = require('./instances');
 
 const rm = (p) => fsp.rm(p, { recursive: true, force: true });
@@ -136,4 +136,62 @@ async function findPoster(roots) {
   return null;
 }
 
-module.exports = { moveMods, deleteMods, withLocal, withoutLocal, findPoster };
+/* ---------- hashing, push into an instance's Mods folder ---------- */
+async function hashDir(d) {
+  const h = crypto.createHash('sha1');
+  const walk = async (p, rel) => {
+    const es = (await fsp.readdir(p, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (const e of es) { const r = rel + '/' + e.name; h.update(r); if (e.isDirectory()) await walk(path.join(p, e.name), r); else h.update(await fsp.readFile(path.join(p, e.name))); }
+  };
+  await walk(d, ''); return h.digest('hex');
+}
+
+/**
+ * Copies the library copies of `list` (index entries of `inst`) into inst.modsDir.
+ * Nothing is overwritten without asking: d.ask(name) -> { action: 'replace' | 'both' | 'skip', all }.
+ */
+async function pushMods(list, inst, { ask, safeChild }) {
+  const results = []; let all = null;
+  for (const m of list) {
+    try {
+      const src = path.join(inst.libDir, m.wid, m.name);
+      if (!fs.existsSync(src)) throw new Error('library copy is missing - re-download this mod');
+      let dest = safeChild(inst.modsDir, m.name);
+      if (fs.existsSync(dest)) {
+        if ((await hashDir(src)) === (await hashDir(dest))) { results.push({ name: m.name, r: 'Already installed' }); continue; }
+        let c = all; if (!c) { c = await ask(m.name); if (c.all) all = c; }
+        if (c.action === 'skip') { results.push({ name: m.name, r: 'Skipped' }); continue; }
+        if (c.action === 'replace') await rm(dest);
+        else { let i = 1, n = `${m.name}_${m.wid}`; while (fs.existsSync(path.join(inst.modsDir, n))) n = `${m.name}_${m.wid}_${++i}`; dest = safeChild(inst.modsDir, n); }
+      }
+      await fsp.cp(src, dest, { recursive: true });
+      results.push({ name: m.name, r: 'Installed' });
+    } catch (e) { results.push({ name: m.name, r: 'Failed', msg: e.message + (e.code === 'EPERM' || e.code === 'EBUSY' ? ' (close Project Zomboid and retry)' : '') }); }
+  }
+  return results;
+}
+
+/* ---------- mod.info: identity and requirements ---------- */
+/** reads `id=` and `require=` from the mod.info in `dir` (both optional) */
+async function readModInfo(dir) {
+  let text = '';
+  try { text = await fsp.readFile(path.join(dir, 'mod.info'), 'utf8'); } catch { return { id: '', requires: [] }; }
+  const get = (k) => { const m = text.match(new RegExp('^\\s*' + k + '\\s*=\\s*(.+?)\\s*$', 'im')); return m ? m[1] : ''; };
+  return { id: get('id'), requires: get('require').split(',').map((s) => s.trim()).filter(Boolean) };
+}
+
+/** requirements declared by downloaded mods that are not provided by any mod of this index */
+function missingRequirements(idx) {
+  const have = new Set();
+  for (const m of idx) if (m.status !== 'Failed') { if (m.modId) have.add(m.modId.toLowerCase()); if (m.name) have.add(m.name.toLowerCase()); }
+  const out = [], seen = new Set();
+  for (const m of idx) if (m.status === 'Downloaded' && m.requires) for (const r of m.requires) {
+    if (have.has(r.toLowerCase())) continue;
+    const key = (m.title || m.name) + '\n' + r;
+    if (seen.has(key)) continue;
+    seen.add(key); out.push({ mod: m.title || m.name, needs: r });
+  }
+  return out;
+}
+
+module.exports = { moveMods, deleteMods, withLocal, withoutLocal, findPoster, hashDir, pushMods, readModInfo, missingRequirements };

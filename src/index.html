@@ -46,8 +46,8 @@
  <!-- Left sidebar: sections, profiles, instance browser -->
  <nav id="side">
   <div class="side-h">Library</div>
-  <button class="nav-item on" data-s="mods"><svg class="ic"><use href="#i-box"/></svg><span>Mods</span><span id="modCount" class="count"></span></button>
-  <button class="nav-item" data-s="browser"><svg class="ic"><use href="#i-globe"/></svg><span>Workshop browser</span></button>
+  <button class="nav-item" data-s="mods"><svg class="ic"><use href="#i-box"/></svg><span>Mods</span><span id="modCount" class="count"></span></button>
+  <button class="nav-item on" data-s="browser"><svg class="ic"><use href="#i-globe"/></svg><span>Workshop browser</span></button>
   <button class="nav-item" id="btnAllMods" data-s="all"><svg class="ic"><use href="#i-list"/></svg><span>All mods</span></button>
 
   <div class="side-h">Version</div>
@@ -66,7 +66,7 @@
  <!-- Main content -->
  <main id="center">
 
-  <section id="modsView">
+  <section id="modsView" hidden>
    <div class="view-head">
     <div class="vh-title"><h2 id="modsTitle">Mods</h2><div id="modsSub" class="muted"></div></div>
     <span class="grow"></span>
@@ -86,7 +86,7 @@
    <div id="modTable" class="table-wrap"></div>
   </section>
 
-  <section id="browser" hidden>
+  <section id="browser">
    <div class="view-head">
     <div class="vh-title"><h2>Workshop browser</h2><div class="muted">Open a mod page, or paste a link or ID, then download it into the selected instance.</div></div>
    </div>
@@ -104,6 +104,10 @@
   <section id="allModsView" hidden>
    <div class="view-head">
     <div class="vh-title"><h2>All mods</h2><div class="muted">Every mod across all instances and version profiles.</div></div>
+    <div class="tabs" role="tablist" aria-label="All mods views">
+     <button class="tab on" role="tab" data-t="mods" aria-selected="true">Mods</button>
+     <button class="tab" role="tab" data-t="downloads" aria-selected="false">Downloads<span id="dlCount" class="count"></span></button>
+    </div>
     <span class="grow"></span>
     <span id="amCount" class="muted"></span>
    </div>
@@ -119,10 +123,12 @@
      <option value="update">Update available</option>
     </select>
     <span class="grow"></span>
-    <span class="muted">Move to</span>
-    <select id="amTarget" class="sel-md" title="Target instance"></select>
-    <button id="amMove" class="accent"><svg class="ic"><use href="#i-download"/></svg>Move</button>
-    <button id="amDel" class="danger-ghost"><svg class="ic"><use href="#i-trash"/></svg>Delete…</button>
+    <span id="amActs" class="acts">
+     <span class="muted">Move to</span>
+     <select id="amTarget" class="sel-md" title="Target instance"></select>
+     <button id="amMove" class="accent"><svg class="ic"><use href="#i-download"/></svg>Move</button>
+     <button id="amDel" class="danger-ghost"><svg class="ic"><use href="#i-trash"/></svg>Delete…</button>
+    </span>
    </div>
    <div id="amTable" class="table-wrap"></div>
   </section>
