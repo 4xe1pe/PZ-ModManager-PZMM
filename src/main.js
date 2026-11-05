@@ -615,8 +615,10 @@ ipcMain.handle('inspect', wrap(async (input) => { // what kind of Workshop item 
     const [d] = await details([wid]);
     if (!d || Number(d.result) !== 1) return { wid, kind: 'unknown' };
     if (Number(d.file_type) !== 2) return { wid, kind: 'mod', title: d.title };
-    const kids = await wk.collectionChildren([wid]);
-    return { wid, kind: 'collection', title: d.title, count: (kids.get(wid) || []).length };
+    // the item IS a collection even if the item count cannot be read: never fall back to single-mod download for it
+    let count = 0;
+    try { count = ((await wk.collectionChildren([wid])).get(wid) || []).length; } catch (e) { log('Could not count the collection items (the download still works): ' + e.message); }
+    return { wid, kind: 'collection', title: d.title, count };
   } catch { return { wid, kind: 'unknown' }; }
 }));
 ipcMain.handle('collectionPlan', wrap(async (input) => {
